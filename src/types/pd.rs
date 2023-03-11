@@ -1,10 +1,10 @@
+use super::device::Device;
 use rdma_sys::*;
 use std::ptr::NonNull;
-use super::device::Device;
 
 pub struct PD<'a> {
     inner: NonNull<ibv_pd>,
-    device: &'a Device,
+    pub device: &'a Device,
 }
 
 unsafe impl Send for PD<'_> {}
@@ -24,6 +24,14 @@ impl<'a> PD<'a> {
 
     pub fn device(&self) -> &Device {
         self.device
+    }
+}
+
+impl Drop for PD<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            ibv_dealloc_pd(self.inner());
+        }
     }
 }
 

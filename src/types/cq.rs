@@ -5,9 +5,9 @@ use rdma_sys::*;
 use super::device::Device;
 const DEFAULT_CQ_SIZE: i32 = 100;
 
-pub struct CQ<'a>{
+pub struct CQ<'a> {
     inner: NonNull<ibv_cq>,
-    device: &'a Device,
+    pub device: &'a Device,
 }
 
 unsafe impl Send for CQ<'_> {}
@@ -27,6 +27,14 @@ impl<'a> CQ<'a> {
 
     pub fn device(&self) -> *mut ibv_context {
         self.device.inner()
+    }
+}
+
+impl Drop for CQ<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            ibv_destroy_cq(self.inner());
+        }
     }
 }
 

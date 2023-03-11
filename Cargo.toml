@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 rdma-sys = "0.3.0"
 clippy-utilities = "0.1.0"
+lazy_static = "1.4.0"

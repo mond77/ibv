@@ -1,17 +1,50 @@
 use rdma_sys::*;
-use std::ptr::NonNull;
+use std::{mem::MaybeUninit, ptr::NonNull};
+
+use super::qp::EndPoint;
 
 pub struct Device {
     pub context: NonNull<ibv_context>,
+    pub port_attr: ibv_port_attr,
+    pub device_attr: ibv_device_attr,
 }
 
 impl Device {
     pub fn new(context: NonNull<ibv_context>) -> Self {
-        Self { context }
+        let mut port_attr = unsafe { std::mem::zeroed() };
+        unsafe { rdma_sys::___ibv_query_port(context.as_ptr(), 1, &mut port_attr) };
+        let mut device_attr = unsafe { std::mem::zeroed() };
+        unsafe { rdma_sys::ibv_query_device(context.as_ptr(), &mut device_attr) };
+        Self {
+            context,
+            port_attr,
+            device_attr,
+        }
     }
 
     pub fn inner(&self) -> *mut ibv_context {
         self.context.as_ptr()
+    }
+
+    pub fn lid(&self) -> u16 {
+        self.port_attr.lid
+    }
+
+    pub fn gid(&self) -> ibv_gid {
+        let mut gid = unsafe { std::mem::zeroed::<ibv_gid>() };
+        let gid_index = 0;
+        unsafe {
+            ibv_query_gid(self.inner(), 1, gid_index, &mut gid);
+        }
+        gid
+    }
+}
+
+impl Drop for Device {
+    fn drop(&mut self) {
+        unsafe {
+            ibv_close_device(self.inner());
+        }
     }
 }
 
