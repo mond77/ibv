@@ -23,11 +23,12 @@ use std::sync::{mpsc::*, Arc};
 use std::{ptr, thread};
 
 lazy_static! {
-    static ref DEVICE: Device = Device::new(default_device());
+    static ref DEFAULT_DEVICE: Device = Device::new(default_device());
+    static ref DEFAULT_PD: PD<'static> = PD::new(&DEFAULT_DEVICE);
 }
 
 fn main() {
-    let device = &DEVICE;
+    let device = &DEFAULT_DEVICE;
 
     let pd_client = Arc::new(PD::new(device));
     let pd_server = Arc::new(PD::new(device));
