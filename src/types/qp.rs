@@ -1,14 +1,14 @@
 use std::{
+    fmt::{self, Debug, Formatter},
     io::{Error, Result},
     mem,
-    ptr::NonNull,
-    str::FromStr,
+    ptr::{self, NonNull},
 };
 
 use clippy_utilities::Cast;
 use rdma_sys::*;
 
-use super::{cq::CQ, pd::PD};
+use super::{cq::CQ, default::DEFAULT_GID_INDEX, pd::PD};
 
 pub struct QP<'a> {
     inner: NonNull<ibv_qp>,
@@ -45,7 +45,7 @@ impl<'a> QP<'a> {
         EndPoint {
             lid: self.pd.device.lid(),
             qpn: self.qpn(),
-            gid: self.pd.device.gid(),
+            gid: self.pd.device.gid(DEFAULT_GID_INDEX),
         }
     }
 
@@ -56,9 +56,8 @@ impl<'a> QP<'a> {
         attr.port_num = 1;
         attr.qp_access_flags = (ibv_access_flags::IBV_ACCESS_LOCAL_WRITE
             | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
-            | ibv_access_flags::IBV_ACCESS_REMOTE_READ
-            | ibv_access_flags::IBV_ACCESS_REMOTE_ATOMIC)
-            .0.cast();
+            | ibv_access_flags::IBV_ACCESS_REMOTE_READ)
+            .0;
         let attr_mask = ibv_qp_attr_mask::IBV_QP_STATE
             | ibv_qp_attr_mask::IBV_QP_PKEY_INDEX
             | ibv_qp_attr_mask::IBV_QP_PORT
@@ -72,13 +71,27 @@ impl<'a> QP<'a> {
     pub fn ready_to_receive(&self, remote_emp: EndPoint) -> Result<()> {
         let mut attr = unsafe { std::mem::zeroed::<ibv_qp_attr>() };
         attr.qp_state = ibv_qp_state::IBV_QPS_RTR;
-        attr.path_mtu = ibv_mtu::IBV_MTU_512;
+        attr.path_mtu = ibv_mtu::IBV_MTU_1024;
         attr.dest_qp_num = remote_emp.qpn;
         // qp_attr.rq_psn(X) must be equal to qp_attr.sq_psn(Y)
         attr.rq_psn = 0;
         attr.max_dest_rd_atomic = 1;
         attr.min_rnr_timer = 18;
-        attr.ah_attr = new_ah(remote_emp);
+        attr.ah_attr = ibv_ah_attr {
+            dlid: remote_emp.lid.cast(),
+            sl: 0,
+            src_path_bits: 0,
+            static_rate: 0,
+            is_global: 1,
+            port_num: 1,
+            grh: ibv_global_route {
+                sgid_index: DEFAULT_GID_INDEX as u8,
+                dgid: remote_emp.gid,
+                hop_limit: 255,
+                traffic_class: 0,
+                flow_label: 0,
+            },
+        };
         let attr_mask = ibv_qp_attr_mask::IBV_QP_STATE
             | ibv_qp_attr_mask::IBV_QP_AV
             | ibv_qp_attr_mask::IBV_QP_PATH_MTU
@@ -130,10 +143,13 @@ pub fn create_qp(pd: &PD, cq: &CQ, qp_cap: QPCap) -> NonNull<ibv_qp> {
     qp_init_attr.send_cq = cq.inner();
     qp_init_attr.recv_cq = cq.inner();
     qp_init_attr.qp_type = ibv_qp_type::IBV_QPT_RC;
+    // 开启SQ（Send Queue）中所有发送请求的信号
     qp_init_attr.sq_sig_all = 1;
     qp_init_attr.cap = qp_cap.into();
     // while send_flag in WR has IBV_SEND_SIGNALED. with sq_sig_all=0, a Work Completion will be generated when the processing of this WR will be ended.
     qp_init_attr.sq_sig_all = 0;
+    qp_init_attr.qp_context = ptr::null_mut();
+    qp_init_attr.srq = ptr::null_mut();
 
     let qp = unsafe { ibv_create_qp(pd.inner(), &mut qp_init_attr) };
     NonNull::new(qp).unwrap()
@@ -211,10 +227,9 @@ impl Into<ibv_qp_cap> for QPCap {
 //     }
 // }
 
-
 pub fn new_ah(enp: EndPoint) -> ibv_ah_attr {
     let mut ah_attr = unsafe { mem::zeroed::<ibv_ah_attr>() };
-    ah_attr.is_global = 0;
+    ah_attr.is_global = 1;
     // If the destination is in same subnet, the LID of the port to which the subnet delivers the packets to.
     // If the destination is in another subnet, the LID of the Router
     ah_attr.dlid = enp.lid;
@@ -238,9 +253,21 @@ pub fn new_ah(enp: EndPoint) -> ibv_ah_attr {
 }
 
 pub struct EndPoint {
+    pub gid: ibv_gid,
     qpn: u32,
     lid: u16,
-    pub gid: ibv_gid,
+}
+
+impl Debug for EndPoint {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "qpn: {}, lid: {}, gid: {:?}",
+            self.qpn,
+            self.lid,
+            unsafe { self.gid.raw }
+        )
+    }
 }
 
 impl EndPoint {

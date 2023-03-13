@@ -1,7 +1,5 @@
 use rdma_sys::*;
-use std::{mem::MaybeUninit, ptr::NonNull};
-
-use super::qp::EndPoint;
+use std::ptr::NonNull;
 
 pub struct Device {
     pub context: NonNull<ibv_context>,
@@ -30,11 +28,10 @@ impl Device {
         self.port_attr.lid
     }
 
-    pub fn gid(&self) -> ibv_gid {
+    pub fn gid(&self, idx: i8) -> ibv_gid {
         let mut gid = unsafe { std::mem::zeroed::<ibv_gid>() };
-        let gid_index = 0;
         unsafe {
-            ibv_query_gid(self.inner(), 1, gid_index, &mut gid);
+            ibv_query_gid(self.inner(), 1, idx as i32, &mut gid);
         }
         gid
     }
@@ -53,6 +50,6 @@ unsafe impl Sync for Device {}
 
 pub fn default_device() -> NonNull<ibv_context> {
     let mut x = 1;
-    let context = unsafe { &mut *ibv_open_device(*ibv_get_device_list(&mut x)) };
+    let context = unsafe { ibv_open_device(*ibv_get_device_list(&mut x)) };
     NonNull::new(context).unwrap()
 }

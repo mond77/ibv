@@ -1,3 +1,7 @@
+//! This example is a simple communication between two QPs.
+//! run by the following command:
+//!     cargo run --example com
+
 #[allow(unused)]
 extern crate rdma_sys;
 use std::sync::mpsc::Sender;
@@ -56,9 +60,12 @@ fn client(pd: Arc<PD>, cq: Arc<CQ>, tx: Sender<EndPoint>, rx: Receiver<EndPoint>
     }
 
     let enp = qp.endpoint();
+    println!("client enp: {:?}", enp);
 
     // Exchange QP information with the remote side (e.g. using sockets)
-    tx.send(enp);
+    if let Err(_) = tx.send(enp) {
+        println!("client err: send failed");
+    }
     let remote_enp = rx.recv().unwrap();
 
     if let Err(err) = qp.ready_to_receive(remote_enp) {
@@ -115,15 +122,19 @@ fn client(pd: Arc<PD>, cq: Arc<CQ>, tx: Sender<EndPoint>, rx: Receiver<EndPoint>
 }
 
 fn server(pd: Arc<PD>, cq: Arc<CQ>, tx: Sender<EndPoint>, rx: Receiver<EndPoint>) {
-    let cap = QPCap::new(10, 10, 1, 1);
+    let cap = QPCap::new(100, 100, 1, 1);
     // Create a QP
     let qp = QP::new(&pd, &cq, cap);
-    qp.init();
+    if let Err(err) = qp.init() {
+        println!("err: {}", err);
+    }
 
     let enp = qp.endpoint();
-
+    println!("server enp: {:?}", enp);
     // Exchange QP information withw the remote side (e.g. using sockets)
-    tx.send(enp);
+    if let Err(_) = tx.send(enp) {
+        println!("server err: send failed");
+    }
     let remote_enp = rx.recv().unwrap();
 
     if let Err(err) = qp.ready_to_receive(remote_enp) {
