@@ -1,17 +1,17 @@
 use super::device::Device;
 use rdma_sys::*;
-use std::ptr::NonNull;
+use std::{ptr::NonNull, sync::Arc};
 
-pub struct PD<'a> {
+pub struct PD {
     inner: NonNull<ibv_pd>,
-    pub device: &'a Device,
+    pub device: Arc<Device>,
 }
 
-unsafe impl Send for PD<'_> {}
-unsafe impl Sync for PD<'_> {}
+unsafe impl Send for PD {}
+unsafe impl Sync for PD {}
 
-impl<'a> PD<'a> {
-    pub fn new(device: &'a Device) -> Self {
+impl PD {
+    pub fn new(device: Arc<Device>) -> Self {
         Self {
             inner: alloc_pd(&device),
             device,
@@ -23,11 +23,11 @@ impl<'a> PD<'a> {
     }
 
     pub fn device(&self) -> &Device {
-        self.device
+        self.device.as_ref()
     }
 }
 
-impl Drop for PD<'_> {
+impl Drop for PD {
     fn drop(&mut self) {
         unsafe {
             ibv_dealloc_pd(self.inner());

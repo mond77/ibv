@@ -28,12 +28,12 @@ impl Device {
         self.port_attr.lid
     }
 
-    pub fn gid(&self, idx: i8) -> ibv_gid {
+    pub fn gid(&self, idx: i8) -> [u8; 16] {
         let mut gid = unsafe { std::mem::zeroed::<ibv_gid>() };
         unsafe {
             ibv_query_gid(self.inner(), 1, idx as i32, &mut gid);
         }
-        gid
+        unsafe { gid.raw }
     }
 }
 

@@ -1,23 +1,23 @@
-use std::ptr::NonNull;
+use std::{ptr::NonNull, sync::Arc};
 
 use rdma_sys::*;
 
 use super::device::Device;
 const DEFAULT_CQ_SIZE: i32 = 100;
 
-pub struct CQ<'a> {
+pub struct CQ {
     inner: NonNull<ibv_cq>,
-    pub device: &'a Device,
+    pub device: Arc<Device>,
 }
 
-unsafe impl Send for CQ<'_> {}
-unsafe impl Sync for CQ<'_> {}
+unsafe impl Send for CQ {}
+unsafe impl Sync for CQ {}
 
-impl<'a> CQ<'a> {
-    pub fn new(device: &'a Device) -> Self {
+impl CQ {
+    pub fn new(device: Arc<Device>) -> Self {
         Self {
-            inner: create_cq(device, DEFAULT_CQ_SIZE),
-            device,
+            inner: create_cq(&device, DEFAULT_CQ_SIZE),
+            device: device.clone(),
         }
     }
 
@@ -30,7 +30,7 @@ impl<'a> CQ<'a> {
     }
 }
 
-impl Drop for CQ<'_> {
+impl Drop for CQ {
     fn drop(&mut self) {
         unsafe {
             ibv_destroy_cq(self.inner());

@@ -3,23 +3,29 @@ use std::{
     io::{Error, Result},
     mem,
     ptr::{self, NonNull},
+    sync::Arc,
 };
+
+extern crate bincode;
+use serde::{Deserialize, Serialize};
 
 use clippy_utilities::Cast;
 use rdma_sys::*;
 
-use super::{cq::CQ, default::DEFAULT_GID_INDEX, pd::PD};
+use super::{cq::CQ, default::DEFAULT_GID_INDEX, device::Device, pd::PD};
 
-pub struct QP<'a> {
+pub struct QP {
     inner: NonNull<ibv_qp>,
-    pub pd: &'a PD<'a>,
-    pub cq: &'a CQ<'a>,
+    pub pd: PD,
+    pub cq: CQ,
 }
 
-impl<'a> QP<'a> {
-    pub fn new(pd: &'a PD, cq: &'a CQ, qp_cap: QPCap) -> Self {
+impl QP {
+    pub fn new(device: Arc<Device>, qp_cap: QPCap) -> Self {
+        let pd = PD::new(device.clone());
+        let cq = CQ::new(device.clone());
         Self {
-            inner: create_qp(pd, cq, qp_cap),
+            inner: create_qp(&pd, &cq, qp_cap),
             pd,
             cq,
         }
@@ -86,7 +92,9 @@ impl<'a> QP<'a> {
             port_num: 1,
             grh: ibv_global_route {
                 sgid_index: DEFAULT_GID_INDEX as u8,
-                dgid: remote_emp.gid,
+                dgid: ibv_gid {
+                    raw: remote_emp.gid,
+                },
                 hop_limit: 255,
                 traffic_class: 0,
                 flow_label: 0,
@@ -127,7 +135,7 @@ impl<'a> QP<'a> {
     }
 }
 
-impl Drop for QP<'_> {
+impl Drop for QP {
     fn drop(&mut self) {
         unsafe {
             ibv_destroy_qp(self.inner());
@@ -135,8 +143,8 @@ impl Drop for QP<'_> {
     }
 }
 
-unsafe impl Send for QP<'_> {}
-unsafe impl Sync for QP<'_> {}
+unsafe impl Send for QP {}
+unsafe impl Sync for QP {}
 
 pub fn create_qp(pd: &PD, cq: &CQ, qp_cap: QPCap) -> NonNull<ibv_qp> {
     let mut qp_init_attr = unsafe { mem::zeroed::<ibv_qp_init_attr>() };
@@ -237,7 +245,7 @@ pub fn new_ah(enp: EndPoint) -> ibv_ah_attr {
     ah_attr.port_num = 1;
 
     //Gloabel route information about remote end. This is useful when sending packets to another subnet.
-    ah_attr.grh.dgid = enp.gid;
+    ah_attr.grh.dgid = ibv_gid { raw: enp.gid };
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 255;
     ah_attr.grh.traffic_class = 0;
@@ -252,8 +260,9 @@ pub fn new_ah(enp: EndPoint) -> ibv_ah_attr {
     ah_attr
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct EndPoint {
-    pub gid: ibv_gid,
+    pub gid: [u8; 16],
     qpn: u32,
     lid: u16,
 }
@@ -263,19 +272,21 @@ impl Debug for EndPoint {
         write!(
             f,
             "qpn: {}, lid: {}, gid: {:?}",
-            self.qpn,
-            self.lid,
-            unsafe { self.gid.raw }
+            self.qpn, self.lid, self.gid
         )
     }
 }
 
 impl EndPoint {
     pub fn new(qpn: u32, lid: u16, gid: [u8; 16]) -> Self {
-        Self {
-            qpn,
-            lid,
-            gid: ibv_gid { raw: gid },
-        }
+        Self { qpn, lid, gid }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap()
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        bincode::deserialize(bytes).unwrap()
     }
 }
