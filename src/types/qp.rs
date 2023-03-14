@@ -6,6 +6,10 @@ use std::{
     sync::Arc,
 };
 
+use std::{
+    io::{Read, Write},
+    net::TcpStream,
+};
 extern crate bincode;
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +22,7 @@ pub struct QP {
     inner: NonNull<ibv_qp>,
     pub pd: PD,
     pub cq: CQ,
+    stream: Option<TcpStream>,
 }
 
 impl QP {
@@ -28,6 +33,7 @@ impl QP {
             inner: create_qp(&pd, &cq, qp_cap),
             pd,
             cq,
+            stream: None,
         }
     }
 
@@ -41,6 +47,10 @@ impl QP {
 
     pub fn cq(&self) -> *mut ibv_cq {
         self.cq.inner()
+    }
+
+    pub fn set_stream(&mut self, stream: TcpStream) {
+        self.stream = Some(stream);
     }
 
     pub fn qpn(&self) -> u32 {
@@ -72,6 +82,27 @@ impl QP {
             return Err(Error::last_os_error());
         }
         Ok(())
+    }
+
+    pub fn handshake(&mut self) {
+        // Exchange QP information withw the remote side (e.g. using sockets)
+        let enp = self.endpoint();
+        println!("server enp: {:?}", enp);
+        let bytes = enp.to_bytes();
+        if let Err(_) = self.stream.as_mut().unwrap().write_all(&bytes) {
+            println!("write stream error");
+        }
+        let mut buf = vec![0; bytes.len()];
+        if let Err(_) = self.stream.as_mut().unwrap().read_exact(&mut buf) {
+            println!("read stream error");
+        }
+        let remote_enp = EndPoint::from_bytes(&buf);
+        if let Err(err) = self.ready_to_receive(remote_enp) {
+            println!("err: {}", err);
+        }
+        if let Err(err) = self.ready_to_send() {
+            println!("server err: {}", err);
+        }
     }
 
     pub fn ready_to_receive(&self, remote_emp: EndPoint) -> Result<()> {
@@ -132,6 +163,15 @@ impl QP {
             return Err(Error::last_os_error());
         }
         Ok(())
+    }
+
+    pub fn send_stream(&mut self, data: &[u8]) {
+        self.stream.as_mut().unwrap().write_all(data).unwrap();
+    }
+
+    //receive from stream
+    pub fn recv_stream(&mut self, data: &mut [u8]) {
+        self.stream.as_mut().unwrap().read_exact(data).unwrap();
     }
 }
 

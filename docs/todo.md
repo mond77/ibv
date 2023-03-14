@@ -10,5 +10,10 @@
  future todo:
     1. add multi devices support
 14th, Mar
- 1. implement write/read operation
- 2. abstract MR ManageMent
+ 1. implement write/read operation (done)
+ 2. abstract MR ManageMent  (yet todo)
+ future todo:
+    1. add cq channel
+15th, Mar
+ 1. abstract MR ManageMent
+ 2. think about the framework. 
