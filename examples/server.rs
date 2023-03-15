@@ -1,7 +1,7 @@
-//! cargo run --exampmle server
+//! cargo run --example server
+//!
 
-use clippy_utilities::Cast;
-use ibv::types::mr::MR;
+use ibv::types::mr::{RemoteMR, MR};
 use ibv::{connection::server::Server, types::qp::QP};
 use rdma_sys::*;
 use std::{ptr, thread};
@@ -21,33 +21,14 @@ fn main() {
 #[allow(dead_code)]
 fn recv(qp: &QP) {
     let mut recv_data: Vec<u8> = vec![0u8; 4];
-    let access = (ibv_access_flags::IBV_ACCESS_LOCAL_WRITE
-        | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
-        | ibv_access_flags::IBV_ACCESS_REMOTE_READ
-        | ibv_access_flags::IBV_ACCESS_REMOTE_ATOMIC)
-        .0
-        .cast();
-    let mr = &mut unsafe {
-        *ibv_reg_mr(
-            qp.pd(),
-            recv_data.as_mut_ptr().cast(),
-            recv_data.len(),
-            access,
-        )
-    };
+    let mr = MR::new(&qp.pd, &mut recv_data);
     let mut wr = ibv_recv_wr {
         wr_id: 1,
         next: ptr::null_mut(),
         sg_list: ptr::null_mut(),
         num_sge: 1,
     };
-
-    let segs = &mut ibv_sge {
-        addr: mr.addr as u64,
-        length: mr.length as u32,
-        lkey: mr.lkey,
-    };
-    wr.sg_list = segs;
+    wr.sg_list = vec![mr.sge()].as_mut_ptr();
     let mut bad_wr = std::ptr::null_mut::<ibv_recv_wr>();
     println!("server post recv");
     unsafe {
@@ -72,26 +53,15 @@ fn recv(qp: &QP) {
 
 pub fn wait_for_client(qp: &mut QP) {
     let mut recv_data: Vec<u8> = vec![0u8; 4];
-    let access = (ibv_access_flags::IBV_ACCESS_LOCAL_WRITE
-        | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
-        | ibv_access_flags::IBV_ACCESS_REMOTE_READ
-        | ibv_access_flags::IBV_ACCESS_REMOTE_ATOMIC)
-        .0
-        .cast();
-    let mr = &mut unsafe {
-        *ibv_reg_mr(
-            qp.pd(),
-            recv_data.as_mut_ptr().cast(),
-            recv_data.len(),
-            access,
-        )
-    };
-    let mr_info = MR::from_ibv_mr(mr).serialize();
-    qp.send_stream(&mr_info);
-    thread::sleep(std::time::Duration::from_secs(1));
-    println!("server send mr info: {:?}", mr_info);
+    let mr = MR::new(&qp.pd, &mut recv_data);
+    let remote_mr = RemoteMR::from(&mr);
+    qp.send_mr(remote_mr.clone());
+    thread::sleep(std::time::Duration::from_millis(700));
+    println!("server send mr info: {:?}", remote_mr);
     // data writen from client
     println!("server recv_data: {:?}", recv_data);
     // wait for client read
-    thread::sleep(std::time::Duration::from_secs(1));
+    let mut append_data = vec![1u8; 4];
+    recv_data.append(&mut append_data);
+    thread::sleep(std::time::Duration::from_millis(700));
 }

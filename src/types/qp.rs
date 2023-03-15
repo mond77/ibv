@@ -1,7 +1,7 @@
 use std::{
     fmt::{self, Debug, Formatter},
     io::{Error, Result},
-    mem,
+    mem::{self, size_of},
     ptr::{self, NonNull},
     sync::Arc,
 };
@@ -16,19 +16,19 @@ use serde::{Deserialize, Serialize};
 use clippy_utilities::Cast;
 use rdma_sys::*;
 
-use super::{cq::CQ, default::DEFAULT_GID_INDEX, device::Device, pd::PD};
+use super::{cq::CQ, default::DEFAULT_GID_INDEX, device::Device, mr::RemoteMR, pd::PD};
 
 pub struct QP {
     inner: NonNull<ibv_qp>,
-    pub pd: PD,
-    pub cq: CQ,
+    pub pd: Arc<PD>,
+    pub cq: Arc<CQ>,
     stream: Option<TcpStream>,
 }
 
 impl QP {
     pub fn new(device: Arc<Device>, qp_cap: QPCap) -> Self {
-        let pd = PD::new(device.clone());
-        let cq = CQ::new(device.clone());
+        let pd = Arc::new(PD::new(device.clone()));
+        let cq = Arc::new(CQ::new(device.clone()));
         Self {
             inner: create_qp(&pd, &cq, qp_cap),
             pd,
@@ -165,13 +165,20 @@ impl QP {
         Ok(())
     }
 
-    pub fn send_stream(&mut self, data: &[u8]) {
-        self.stream.as_mut().unwrap().write_all(data).unwrap();
+    pub fn send_mr(&mut self, remote_mr: RemoteMR) {
+        let bytes = remote_mr.serialize();
+        self.stream.as_mut().unwrap().write_all(&bytes).unwrap();
     }
 
-    //receive from stream
-    pub fn recv_stream(&mut self, data: &mut [u8]) {
-        self.stream.as_mut().unwrap().read_exact(data).unwrap();
+    // receive RemoteMR from stream
+    pub fn recv_mr(&mut self) -> RemoteMR {
+        let mut remote_mr_info = vec![0u8; size_of::<RemoteMR>()];
+        self.stream
+            .as_mut()
+            .unwrap()
+            .read_exact(&mut remote_mr_info)
+            .unwrap();
+        RemoteMR::deserialize(remote_mr_info)
     }
 }
 

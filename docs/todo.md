@@ -15,5 +15,7 @@
  future todo:
     1. add cq channel
 15th, Mar
- 1. abstract MR ManageMent
- 2. think about the framework. 
+ 1. abstract MR ManageMent (done)
+ 2. think about the transport framework. (done)
+16th, Mar
+ 1. abstract WR (work Request of write/read,send/recv)
