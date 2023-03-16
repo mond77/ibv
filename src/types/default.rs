@@ -1,1 +1,1 @@
-pub const DEFAULT_GID_INDEX: i8 = 1;
+pub const DEFAULT_GID_INDEX: u8 = 1;

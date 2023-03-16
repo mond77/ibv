@@ -9,6 +9,7 @@ use ibv::{
 use rdma_sys::ibv_wr_opcode::*;
 use rdma_sys::{ibv_wr_opcode::IBV_WR_SEND, *};
 use std::thread;
+
 fn main() {
     let cli = Client::new();
     let qp = cli.connect("127.0.0.1:7777").unwrap();

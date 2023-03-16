@@ -1,5 +1,5 @@
 extern crate bincode;
-use std::ptr::NonNull;
+use std::{ptr::NonNull, sync::Mutex};
 
 use clippy_utilities::Cast;
 use rdma_sys::{ibv_access_flags, ibv_mr, ibv_reg_mr, ibv_sge};
@@ -86,5 +86,40 @@ impl From<&MR> for RemoteMR {
             length: mr.length,
             rkey: mr.rkey,
         }
+    }
+}
+
+// a section of remote MR, alloced
+#[derive(Clone)]
+pub struct RemoteBuf {
+    pub addr: u64,
+    pub length: u32,
+    pub rkey: u32,
+}
+
+pub struct RemoteBufManager {
+    lock: Mutex<()>,
+    // todo: index
+    mr: RemoteMR,
+}
+
+impl RemoteBufManager {
+    pub fn new(mr: RemoteMR) -> Self {
+        Self {
+            lock: Mutex::new(()),
+            mr,
+        }
+    }
+
+    // todo: block it when the space is not enough
+    // cann't work!
+    pub fn alloc(&self, length: u32) -> Option<RemoteBuf> {
+        let _lock = self.lock.lock().unwrap();
+        if length > self.mr.length {
+            return None;
+        }
+        let addr = self.mr.addr;
+        let rkey = self.mr.rkey;
+        Some(RemoteBuf { addr, length, rkey })
     }
 }

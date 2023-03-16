@@ -61,7 +61,7 @@ impl QP {
         EndPoint {
             lid: self.pd.device.lid(),
             qpn: self.qpn(),
-            gid: self.pd.device.gid(DEFAULT_GID_INDEX),
+            gid: self.pd.device.gid(DEFAULT_GID_INDEX as i8),
         }
     }
 
