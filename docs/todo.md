@@ -19,7 +19,9 @@
  2. think about the transport framework. (done)
 16th to ~ , Mar
  1. abstract WR (work Request of write/read,send/recv) (done)
- 2. MR management：
+ 2. abstract poll CQ with size. (done)
+ 3. implement the write_with_imm operation, how does the WC generated in the remote end? (generate with a solicited event)
+ 4. MR management：
      1、MR -> ibv_sge（Implement it when considering the send buffer）
      2、RemoteMR -> Remote_Buffer；
      ringbuf：
@@ -27,4 +29,4 @@
 		2、head and tail handle : single WR split into two Or ignore the tail fragment
         3、performance：use lock at first
 		4、Lost processing: not thought right now
- 3. implement the write_with_imm operation, how does the WC generated in the remote end?
+ 

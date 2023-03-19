@@ -12,10 +12,10 @@ fn main() {
 
     println!("server ready to use");
     // recv operation
-    // recv(&qp);
+    recv(&qp);
 
     // client write/read
-    wait_for_client(&mut qp);
+    // wait_for_client(&mut qp);
 }
 
 #[allow(dead_code)]
@@ -33,9 +33,17 @@ fn recv(qp: &QP) {
     println!("server recv_data: {:?}", recv_data);
 
     thread::sleep(std::time::Duration::from_secs(1));
+
+    let wcs = qp.cq.poll_wc(1).unwrap();
+    if wcs.len() == 0 {
+        println!("no wc");
+        return;
+    }
+    let wc = wcs.get(0).unwrap();
+    println!("wc: {:?}", wc);
+
     println!("done");
 }
-
 
 pub fn wait_for_client(qp: &mut QP) {
     let mut recv_data: Vec<u8> = vec![0u8; 4];

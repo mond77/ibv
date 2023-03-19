@@ -1,7 +1,11 @@
 //! WR (work request) types.
 
-use super::{mr::RemoteBuf, qp::QP};
-use rdma_sys::{*, ibv_wr_opcode::{IBV_WR_RDMA_READ, IBV_WR_RDMA_WRITE, IBV_WR_RDMA_WRITE_WITH_IMM, IBV_WR_SEND}};
+use super::qp::QP;
+use clippy_utilities::Cast;
+use rdma_sys::{
+    ibv_wr_opcode::{IBV_WR_RDMA_READ, IBV_WR_RDMA_WRITE, IBV_WR_RDMA_WRITE_WITH_IMM, IBV_WR_SEND},
+    *,
+};
 use std::io::Result;
 #[derive(Clone)]
 pub struct RDMA {
@@ -72,24 +76,19 @@ impl WR {
                                 wr.imm_data_invalidated_rkey_union.imm_data = imm;
                             }
                         }
-                        
+
                         wr.wr.rdma.remote_addr = rdma.addr;
                         wr.wr.rdma.rkey = rdma.rkey;
-                        
                     }
                     None => {
                         // SEND
                         wr.opcode = IBV_WR_SEND;
+                        // send operation will be signaled
+                        wr.send_flags = ibv_send_flags::IBV_SEND_SIGNALED.0.cast();
                     }
                 }
                 let mut bad_send_wr = std::ptr::null_mut();
-                let ret = unsafe {
-                    ibv_post_send(
-                        qp.inner(),
-                        &mut wr,
-                        &mut bad_send_wr,
-                    )
-                };
+                let ret = unsafe { ibv_post_send(qp.inner(), &mut wr, &mut bad_send_wr) };
                 if ret != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -97,18 +96,12 @@ impl WR {
             WRType::RECV => {
                 // RECV
                 let mut wr = unsafe { std::mem::zeroed::<ibv_recv_wr>() };
-        wr.wr_id = self.wr_id;
-        wr.num_sge = self.sges.len() as i32;
-        wr.next = std::ptr::null_mut();
-        wr.sg_list = self.sges.as_mut_ptr();
-        let mut bad_recv_wr = std::ptr::null_mut();
-        unsafe {
-            ibv_post_recv(
-                qp.inner(),
-                &mut wr,
-                &mut bad_recv_wr,
-            )
-        };
+                wr.wr_id = self.wr_id;
+                wr.num_sge = self.sges.len() as i32;
+                wr.next = std::ptr::null_mut();
+                wr.sg_list = self.sges.as_mut_ptr();
+                let mut bad_recv_wr = std::ptr::null_mut();
+                unsafe { ibv_post_recv(qp.inner(), &mut wr, &mut bad_recv_wr) };
             }
         }
         Ok(())
