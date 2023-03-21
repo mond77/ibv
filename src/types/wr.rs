@@ -83,10 +83,10 @@ impl WR {
                     None => {
                         // SEND
                         wr.opcode = IBV_WR_SEND;
-                        // send operation will be signaled
-                        wr.send_flags = ibv_send_flags::IBV_SEND_SIGNALED.0.cast();
                     }
                 }
+                // send operation will be signaled
+                wr.send_flags = ibv_send_flags::IBV_SEND_SIGNALED.0.cast();
                 let mut bad_send_wr = std::ptr::null_mut();
                 let ret = unsafe { ibv_post_send(qp.inner(), &mut wr, &mut bad_send_wr) };
                 if ret != 0 {

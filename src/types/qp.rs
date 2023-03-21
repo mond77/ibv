@@ -16,7 +16,16 @@ use serde::{Deserialize, Serialize};
 use clippy_utilities::Cast;
 use rdma_sys::*;
 
-use super::{cq::CQ, default::DEFAULT_GID_INDEX, device::Device, mr::RemoteMR, pd::PD};
+use crate::connection::DEFAULT_BUFFER_SIZE;
+
+use super::{
+    cq::CQ,
+    default::DEFAULT_GID_INDEX,
+    device::Device,
+    mr::{LocalBuf, RecvBuffer, RemoteBuf, RemoteMR, MR},
+    pd::PD,
+    wr::{RDMAType, WRType, RDMA, WR},
+};
 
 pub struct QP {
     inner: NonNull<ibv_qp>,
@@ -165,6 +174,16 @@ impl QP {
         Ok(())
     }
 
+    pub fn exchange_recv_buf(&mut self) -> (RecvBuffer, RemoteMR) {
+        let mut recv_buffer: Vec<u8> = vec![0u8; DEFAULT_BUFFER_SIZE];
+        let mr = MR::new(&self.pd, &mut recv_buffer);
+        // send local_buf to remote
+        self.send_mr(RemoteMR::from(&mr));
+        // receive remote_buf from remote
+        let remote_mr = self.recv_mr();
+        (RecvBuffer::new(Arc::new(mr)), remote_mr)
+    }
+
     pub fn send_mr(&mut self, remote_mr: RemoteMR) {
         let bytes = remote_mr.serialize();
         self.stream.as_mut().unwrap().write_all(&bytes).unwrap();
@@ -180,15 +199,40 @@ impl QP {
             .unwrap();
         RemoteMR::deserialize(remote_mr_info)
     }
-}
 
-impl Drop for QP {
-    fn drop(&mut self) {
-        unsafe {
-            ibv_destroy_qp(self.inner());
+    pub fn write_with_imm(&self, local_buf: LocalBuf, remote_buf: RemoteBuf, imm: u32) {
+        let mut wr_write = WR::new(
+            1,
+            WRType::SEND,
+            vec![local_buf.into()],
+            Some(RDMA::new(
+                RDMAType::WRITEIMM(imm),
+                remote_buf.addr,
+                remote_buf.rkey,
+            )),
+        );
+        if let Err(e) = wr_write.post_to_qp(self) {
+            println!("post send error: {:?}", e);
+        }
+    }
+
+    pub fn post_null_recv(&self, count: usize) {
+        for _ in 0..count {
+            let mut wr_recv = WR::new(0, WRType::RECV, vec![], None);
+            if let Err(e) = wr_recv.post_to_qp(self) {
+                println!("post recv error: {:?}", e);
+            }
         }
     }
 }
+
+// impl Drop for QP {
+//     fn drop(&mut self) {
+//         unsafe {
+//             ibv_destroy_qp(self.inner());
+//         }
+//     }
+// }
 
 unsafe impl Send for QP {}
 unsafe impl Sync for QP {}
@@ -198,8 +242,6 @@ pub fn create_qp(pd: &PD, cq: &CQ, qp_cap: QPCap) -> NonNull<ibv_qp> {
     qp_init_attr.send_cq = cq.inner();
     qp_init_attr.recv_cq = cq.inner();
     qp_init_attr.qp_type = ibv_qp_type::IBV_QPT_RC;
-    // 开启SQ（Send Queue）中所有发送请求的信号
-    qp_init_attr.sq_sig_all = 1;
     qp_init_attr.cap = qp_cap.into();
     // while send_flag in WR has IBV_SEND_SIGNALED. with sq_sig_all=0, a Work Completion will be generated when the processing of this WR will be ended.
     qp_init_attr.sq_sig_all = 0;
