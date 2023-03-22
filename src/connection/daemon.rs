@@ -1,13 +1,14 @@
-use crate::types::cq::{
-    Opcode::{Write, WriteWithImm},
-    CQ,
+use crate::types::{
+    cq::Opcode::{Write, WriteWithImm},
+    mr::RecvBuffer,
+    qp::QP,
 };
 use std::sync::Arc;
-use tokio::sync::mpsc::Sender;
 
-pub async fn polling(cq: Arc<CQ>, tx: Sender<u32>) {
+// if use tokio run a task of polling, the task will be blocked by the tokio runtime. If use tokio(mpsc), the disorder of wc will be a problem.(it doesn't matter)
+pub fn polling(qp: Arc<QP>, mut recv_buf: RecvBuffer) {
     loop {
-        let wcs = match cq.poll_wc(5) {
+        let wcs = match qp.cq.poll_wc(10) {
             Ok(wcs) => wcs,
             Err(_) => {
                 println!("poll wc error");
@@ -22,11 +23,12 @@ pub async fn polling(cq: Arc<CQ>, tx: Sender<u32>) {
             // match opcode
             match wc.opcode() {
                 WriteWithImm => {
-                    // receive data
-                    if let Err(e) = tx.send(wc.byte_len()).await {
-                        println!("polling send error: {}", e);
-                    }
+                    let length = wc.byte_len();
+                    let data = recv_buf.read(length);
+                    // handel data
+                    println!("recv data: {:?}", data);
                     // todo: add RQE in task
+                    qp.post_null_recv(1);
                 }
                 Write => {
                     // send data
@@ -38,7 +40,7 @@ pub async fn polling(cq: Arc<CQ>, tx: Sender<u32>) {
         }
         if wcs.len() == 0 {
             // sleep for 10ms
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
 }

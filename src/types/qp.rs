@@ -1,3 +1,4 @@
+use std::mem::ManuallyDrop;
 use std::{
     fmt::{self, Debug, Formatter},
     io::{Error, Result},
@@ -5,7 +6,6 @@ use std::{
     ptr::{self, NonNull},
     sync::Arc,
 };
-use tokio::sync::mpsc::{self, Sender};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -20,7 +20,7 @@ use rdma_sys::*;
 use crate::connection::DEFAULT_BUFFER_SIZE;
 
 use super::{
-    cq::{CQ, DEFAULT_CQ_SIZE},
+    cq::CQ,
     default::DEFAULT_GID_INDEX,
     device::Device,
     mr::{LocalBuf, RecvBuffer, RemoteBuf, RemoteMR, MR},
@@ -175,11 +175,13 @@ impl QP {
         Ok(())
     }
 
-    pub async fn exchange_recv_buf(&mut self) -> (RecvBuffer, RemoteMR, Sender<u32>) {
-        let mut recv_buffer: Vec<u8> = vec![0u8; DEFAULT_BUFFER_SIZE];
-        let mr = Arc::new(MR::new(&self.pd, &mut recv_buffer));
-        let (tx, rx) = mpsc::channel(DEFAULT_CQ_SIZE as usize);
-        let recv_buffer = RecvBuffer::new(mr.clone(), rx);
+    pub async fn exchange_recv_buf(&mut self) -> (RecvBuffer, RemoteMR) {
+        let recv_buffer = ManuallyDrop::new([0u8; DEFAULT_BUFFER_SIZE]);
+        let mr = Arc::new(MR::new(
+            &self.pd,
+            &mut ManuallyDrop::into_inner(recv_buffer),
+        ));
+        let recv_buffer = RecvBuffer::new(mr.clone(), recv_buffer);
         // send local_buf to remote
         let send_mr = RemoteMR::from_mr(mr);
 
@@ -189,7 +191,7 @@ impl QP {
 
         // channel to notify recvbuf is ready
 
-        (recv_buffer, remote_mr, tx)
+        (recv_buffer, remote_mr)
     }
 
     pub async fn send_mr(&mut self, remote_mr: RemoteMR) {

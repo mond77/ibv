@@ -12,8 +12,8 @@ async fn main() {
     println!("server ready to use");
 
     println!("start recving");
-    if let Err(e) = conn.recving.await {
-        println!("recving error: {}", e);
+    if let Err(e) = conn.polling.join() {
+        println!("recving error: {:?}", e);
     }
 
     println!("done");

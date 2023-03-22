@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
+use std::thread::JoinHandle;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
-
-use tokio::sync::mpsc::Sender;
 
 use clippy_utilities::Cast;
 
@@ -12,17 +10,16 @@ use crate::types::{
     qp::QP,
 };
 
-use super::{daemon::polling, DEFAULT_BUFFER_SIZE};
+use super::daemon::polling;
 
 pub struct Conn {
     qp: Arc<QP>,
     send_buf: SendBuffer,
     //
     // recv_buf: RecvBuffer,
-    pub recving: JoinHandle<()>,
     // remote recv_buf
     allocator: RemoteBufManager,
-    _polling: JoinHandle<()>,
+    pub polling: JoinHandle<()>,
     lock: Mutex<()>,
 }
 
@@ -30,26 +27,19 @@ unsafe impl Send for Conn {}
 unsafe impl Sync for Conn {}
 
 impl Conn {
-    pub async fn new(
-        qp: Arc<QP>,
-        recv_buf: RecvBuffer,
-        remote_mr: RemoteMR,
-        tx: Sender<u32>,
-    ) -> Self {
+    pub async fn new(qp: Arc<QP>, recv_buf: RecvBuffer, remote_mr: RemoteMR) -> Self {
         let allocator = RemoteBufManager::new(remote_mr);
-        let send_buf = SendBuffer::new(&qp.pd, DEFAULT_BUFFER_SIZE);
-        let cq = qp.cq.clone();
+        let send_buf = SendBuffer::new(&qp.pd);
+        let qp_c = qp.clone();
         // add sufficient RQE, maybe use SRQ to notify adding RQE
         qp.post_null_recv(1000);
-        let polling = tokio::spawn(polling(cq, tx));
-        let recving = tokio::spawn(recv_msg(recv_buf));
+        let polling = std::thread::spawn(|| polling(qp_c, recv_buf));
         Conn {
             qp,
             allocator,
             lock: Mutex::new(()),
             send_buf,
-            recving,
-            _polling: polling,
+            polling: polling,
         }
     }
 
@@ -70,19 +60,9 @@ impl Conn {
 
         // allocate a remote buffer
         let _lock = self.lock.lock().await;
-        let buf = { self.allocator.alloc(msg.len() as u32).unwrap() };
+        let buf = self.allocator.alloc(msg.len() as u32).unwrap();
 
         // post a send operation
         self.qp.write_with_imm(local_buf, buf, 32);
-    }
-}
-
-pub async fn recv_msg(mut recv_buf: RecvBuffer) {
-    println!("start recv_msg");
-    loop {
-        let length = recv_buf.rx.recv().await.unwrap();
-        let data = recv_buf.read(length);
-        // handel data
-        println!("recv data: {:?}", data);
     }
 }

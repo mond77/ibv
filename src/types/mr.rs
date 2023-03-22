@@ -1,14 +1,15 @@
 extern crate bincode;
 use std::{
-    cell::RefCell,
+    mem::ManuallyDrop,
     ptr::NonNull,
     sync::{Arc, Mutex},
 };
-use tokio::sync::mpsc::Receiver;
 
 use clippy_utilities::Cast;
 use rdma_sys::{ibv_access_flags, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
+
+use crate::connection::DEFAULT_BUFFER_SIZE;
 
 use super::pd::PD;
 
@@ -53,6 +54,14 @@ impl MR {
             addr: self.addr,
             length: self.length,
             lkey: self.lkey,
+        }
+    }
+}
+
+impl Drop for MR {
+    fn drop(&mut self) {
+        unsafe {
+            rdma_sys::ibv_dereg_mr(self.inner());
         }
     }
 }
@@ -111,8 +120,8 @@ impl Into<ibv_sge> for LocalBuf {
     }
 }
 
-impl From<MR> for LocalBuf {
-    fn from(mr: MR) -> Self {
+impl From<Arc<MR>> for LocalBuf {
+    fn from(mr: Arc<MR>) -> Self {
         Self {
             addr: mr.addr,
             length: mr.length,
@@ -123,8 +132,7 @@ impl From<MR> for LocalBuf {
 
 pub struct RemoteBufManager {
     // do it in conn level
-    _lock: Mutex<()>,
-    index: RefCell<u64>,
+    index: *mut u64,
     limit: u64,
     mr: RemoteMR,
 }
@@ -132,8 +140,7 @@ pub struct RemoteBufManager {
 impl RemoteBufManager {
     pub fn new(mr: RemoteMR) -> Self {
         Self {
-            _lock: Mutex::new(()),
-            index: RefCell::new(mr.addr),
+            index: Box::into_raw(Box::new(mr.addr)),
             limit: mr.addr + mr.length as u64,
             mr,
         }
@@ -141,33 +148,38 @@ impl RemoteBufManager {
 
     // todo: block it when the space is not enough
     pub fn alloc(&self, length: u32) -> Option<RemoteBuf> {
-        // let _lock = self._lock.lock().unwrap();
-        let mut index = self.index.borrow_mut();
-        if *index + length as u64 > self.limit {
-            return None;
+        unsafe {
+            let index = self.index;
+            if *index + length as u64 > self.limit {
+                return None;
+            }
+            let addr = *index;
+            let rkey = self.mr.rkey;
+            *index = *index + length as u64;
+            Some(RemoteBuf { addr, length, rkey })
         }
-        let addr = *index;
-        let rkey = self.mr.rkey;
-        *index = *index + length as u64;
-        Some(RemoteBuf { addr, length, rkey })
     }
 }
 
 // use BufPoll instead
 pub struct SendBuffer {
+    _mr: Arc<MR>,
+    send_buf: ManuallyDrop<[u8; DEFAULT_BUFFER_SIZE]>,
     lock: Mutex<u64>,
     limit: u64,
-    send_buf: LocalBuf,
+    local_buf: LocalBuf,
 }
 
 impl SendBuffer {
-    pub fn new(pd: &PD, size: usize) -> Self {
-        let mut send_buf: Vec<u8> = vec![0u8; size];
-        let mr = MR::new(pd, &mut send_buf);
+    pub fn new(pd: &PD) -> Self {
+        let send_buf = ManuallyDrop::new([0u8; DEFAULT_BUFFER_SIZE]);
+        let mr = Arc::new(MR::new(pd, &mut ManuallyDrop::into_inner(send_buf)));
         Self {
             lock: Mutex::new(mr.addr),
+            send_buf,
             limit: mr.addr + mr.length as u64,
-            send_buf: mr.into(),
+            local_buf: mr.clone().into(),
+            _mr: mr,
         }
     }
 
@@ -177,15 +189,24 @@ impl SendBuffer {
             return None;
         }
         let addr = *idx;
-        let lkey = self.send_buf.lkey;
+        let lkey = self.local_buf.lkey;
         *idx = *idx + length as u64;
+
         Some(LocalBuf { addr, length, lkey })
     }
 }
 
+impl Drop for SendBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            ManuallyDrop::drop(&mut self.send_buf);
+        }
+    }
+}
+
 pub struct RecvBuffer {
-    pub rx: Receiver<u32>,
-    _mr: Arc<MR>,
+    pub _mr: Arc<MR>,
+    recv_buffer: ManuallyDrop<[u8; DEFAULT_BUFFER_SIZE]>,
     index: u64,
     limit: u64,
 }
@@ -194,10 +215,10 @@ unsafe impl Send for RecvBuffer {}
 unsafe impl Sync for RecvBuffer {}
 
 impl RecvBuffer {
-    pub fn new(mr: Arc<MR>, rx: Receiver<u32>) -> Self {
+    pub fn new(mr: Arc<MR>, recv_buffer: ManuallyDrop<[u8; DEFAULT_BUFFER_SIZE]>) -> Self {
         Self {
-            rx,
             _mr: mr.clone(),
+            recv_buffer,
             index: mr.addr,
             limit: mr.addr + mr.length as u64,
         }
@@ -213,5 +234,13 @@ impl RecvBuffer {
         }
         self.index = self.index + length as u64;
         data
+    }
+}
+
+impl Drop for RecvBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            ManuallyDrop::drop(&mut self.recv_buffer);
+        }
     }
 }
