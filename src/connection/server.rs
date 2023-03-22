@@ -1,8 +1,8 @@
 use crate::connection::conn::Conn;
 use crate::types::qp::{QPCap, QP};
-use std::net::TcpListener;
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use tokio::net::TcpListener;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::types::device::{default_device, Device};
 pub struct Server {
@@ -14,25 +14,23 @@ unsafe impl<'a> Send for Server {}
 unsafe impl<'a> Sync for Server {}
 
 impl Server {
-    pub fn new(addr: String) -> Self {
-        let (tx, rx) = channel();
+    pub async fn new(addr: String) -> Self {
+        let (tx, rx) = channel(10);
         let address = addr.clone();
-        std::thread::spawn(move || {
-            run(address, tx);
-        });
+        tokio::spawn(run(address, tx));
         Server { addr, incoming: rx }
     }
 
-    pub fn accept(&self) -> Conn {
-        self.incoming.recv().unwrap()
+    pub async fn accept(&mut self) -> Conn {
+        self.incoming.recv().await.unwrap()
     }
 }
 
-pub fn run(addr: String, sender: Sender<Conn>) {
-    let listener = TcpListener::bind(addr.clone()).unwrap();
+pub async fn run(addr: String, sender: Sender<Conn>) {
+    let listener = TcpListener::bind(addr.clone()).await.unwrap();
     let device = Arc::new(Device::new(default_device()));
     loop {
-        match listener.accept() {
+        match listener.accept().await {
             Ok((stream, addr)) => {
                 println!("New connection: {}", addr);
                 // Create a QP for the new connection
@@ -41,13 +39,16 @@ pub fn run(addr: String, sender: Sender<Conn>) {
                     println!("err: {}", err);
                 }
                 qp.set_stream(stream);
-                qp.handshake();
+                qp.handshake().await;
                 println!("handshake done");
                 // exchange recv_buf with client
-                let (recv_buf, remote_mr) = qp.exchange_recv_buf();
-                let conn = Conn::new(Arc::new(qp), recv_buf, remote_mr);
+                let (recv_buf, remote_mr, tx) = qp.exchange_recv_buf().await;
+                let conn = Conn::new(Arc::new(qp), recv_buf, remote_mr, tx).await;
 
-                sender.send(conn).unwrap();
+                if let Err(e) = sender.send(conn).await {
+                    println!("Error: {}", e);
+                    break;
+                }
             }
             Err(e) => {
                 println!("Error: {}", e);

@@ -5,11 +5,12 @@ use std::{
     ptr::{self, NonNull},
     sync::Arc,
 };
-
-use std::{
-    io::{Read, Write},
+use tokio::sync::mpsc::{self, Sender};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
+
 extern crate bincode;
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +20,7 @@ use rdma_sys::*;
 use crate::connection::DEFAULT_BUFFER_SIZE;
 
 use super::{
-    cq::CQ,
+    cq::{CQ, DEFAULT_CQ_SIZE},
     default::DEFAULT_GID_INDEX,
     device::Device,
     mr::{LocalBuf, RecvBuffer, RemoteBuf, RemoteMR, MR},
@@ -93,16 +94,16 @@ impl QP {
         Ok(())
     }
 
-    pub fn handshake(&mut self) {
+    pub async fn handshake(&mut self) {
         // Exchange QP information withw the remote side (e.g. using sockets)
         let enp = self.endpoint();
         println!("server enp: {:?}", enp);
         let bytes = enp.to_bytes();
-        if let Err(_) = self.stream.as_mut().unwrap().write_all(&bytes) {
+        if let Err(_) = self.stream.as_mut().unwrap().write_all(&bytes).await {
             println!("write stream error");
         }
         let mut buf = vec![0; bytes.len()];
-        if let Err(_) = self.stream.as_mut().unwrap().read_exact(&mut buf) {
+        if let Err(_) = self.stream.as_mut().unwrap().read_exact(&mut buf).await {
             println!("read stream error");
         }
         let remote_enp = EndPoint::from_bytes(&buf);
@@ -174,28 +175,41 @@ impl QP {
         Ok(())
     }
 
-    pub fn exchange_recv_buf(&mut self) -> (RecvBuffer, RemoteMR) {
+    pub async fn exchange_recv_buf(&mut self) -> (RecvBuffer, RemoteMR, Sender<u32>) {
         let mut recv_buffer: Vec<u8> = vec![0u8; DEFAULT_BUFFER_SIZE];
-        let mr = MR::new(&self.pd, &mut recv_buffer);
+        let mr = Arc::new(MR::new(&self.pd, &mut recv_buffer));
+        let (tx, rx) = mpsc::channel(DEFAULT_CQ_SIZE as usize);
+        let recv_buffer = RecvBuffer::new(mr.clone(), rx);
         // send local_buf to remote
-        self.send_mr(RemoteMR::from(&mr));
+        let send_mr = RemoteMR::from_mr(mr);
+
+        self.send_mr(send_mr).await;
         // receive remote_buf from remote
-        let remote_mr = self.recv_mr();
-        (RecvBuffer::new(Arc::new(mr)), remote_mr)
+        let remote_mr = self.recv_mr().await;
+
+        // channel to notify recvbuf is ready
+
+        (recv_buffer, remote_mr, tx)
     }
 
-    pub fn send_mr(&mut self, remote_mr: RemoteMR) {
+    pub async fn send_mr(&mut self, remote_mr: RemoteMR) {
         let bytes = remote_mr.serialize();
-        self.stream.as_mut().unwrap().write_all(&bytes).unwrap();
+        self.stream
+            .as_mut()
+            .unwrap()
+            .write_all(&bytes)
+            .await
+            .unwrap();
     }
 
     // receive RemoteMR from stream
-    pub fn recv_mr(&mut self) -> RemoteMR {
+    pub async fn recv_mr(&mut self) -> RemoteMR {
         let mut remote_mr_info = vec![0u8; size_of::<RemoteMR>()];
         self.stream
             .as_mut()
             .unwrap()
             .read_exact(&mut remote_mr_info)
+            .await
             .unwrap();
         RemoteMR::deserialize(remote_mr_info)
     }

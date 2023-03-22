@@ -23,6 +23,7 @@
  3. implement the write_with_imm operation. (done)
  4. sendbuf,recvbuf (done)
     future todo: use wr_list to improve the performace
-22th, Mar
- 1. debug for server process.
- 2. completion event channel.
+22th to ~, Mar 
+ 1. change to async code, slove the thread communication blocking.
+ 2. Two-way communication between client and server. 
+ 3. completion event channel to notify event.

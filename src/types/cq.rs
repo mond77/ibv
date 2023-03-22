@@ -8,7 +8,7 @@ use rdma_sys::*;
 use std::io::{Error, Result};
 
 use super::device::Device;
-const DEFAULT_CQ_SIZE: i32 = 10000;
+pub static DEFAULT_CQ_SIZE: i32 = 10000;
 
 pub struct CQ {
     inner: NonNull<ibv_cq>,

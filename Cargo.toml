@@ -8,6 +8,6 @@ edition = "2021"
 [dependencies]
 rdma-sys = {git = "https://github.com/mond77/rdma-sys.git", branch = "master"}
 clippy-utilities = "0.1.0"
-tokio = "1.26.0"
+tokio = { versoin = "1.26.0", features = ["full"]}
 serde = { version = "1.0.155", features = ["derive"]}
 bincode = "1.3.3"
