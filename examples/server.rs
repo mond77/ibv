@@ -1,7 +1,7 @@
 //! cargo run --example server
 //!
 
-use std::sync::Arc;
+use std::{io::IoSlice, sync::Arc};
 
 use ibv::connection::server::Server;
 extern crate tokio;
@@ -16,16 +16,22 @@ async fn main() {
     println!("start recving");
     let mut count: u32 = 0;
     loop {
-        let msg = conn.recv_msg().await;
-        if msg.is_empty() {
-            break;
-        }
+        let msg = match conn.recv_msg().await {
+            Ok(msg) => msg,
+            Err(_) => break,
+        };
         // handle data and response
         count += 1;
         let conn = conn.clone();
         tokio::spawn(async move {
             let response = count.to_be_bytes();
-            conn.send_msg(&response).await;
+            let response = &[IoSlice::new(&response)];
+            match conn.send_msg(response).await {
+                Ok(_) => {
+                    println!("response sent");
+                }
+                Err(err) => println!("err: {}", err),
+            }
         });
         println!("count: {}, msg: {:?}", count, msg);
     }

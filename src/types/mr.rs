@@ -1,14 +1,11 @@
 extern crate bincode;
-use std::{
-    mem::ManuallyDrop,
-    ptr::NonNull,
-    sync::{Arc, Mutex},
-};
+use std::{mem::ManuallyDrop, ptr::NonNull, sync::Arc};
 
 use clippy_utilities::Cast;
 use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Receiver;
+use tokio::{io, sync::Mutex};
 
 use crate::connection::DEFAULT_BUFFER_SIZE;
 
@@ -176,8 +173,8 @@ impl SendBuffer {
         }
     }
 
-    pub fn alloc(&self, length: u32) -> Option<LocalBuf> {
-        let mut idx = self.index.lock().unwrap();
+    pub async fn alloc(&self, length: u32) -> Option<LocalBuf> {
+        let mut idx = self.index.lock().await;
         if *idx + length as u64 > self.limit {
             return None;
         }
@@ -220,24 +217,29 @@ impl RecvBuffer {
         }
     }
 
-    pub fn read(&self, length: u32) -> Vec<u8> {
-        let mut data = vec![0u8; length as usize];
-        unsafe {
-            std::ptr::copy(*self.index as *const u8, data.as_mut_ptr(), length as usize);
+    // after recv data form the &[u8], need to call release_buf to release the buf
+    pub fn read(&self, length: u32) -> io::Result<&[u8]> {
+        // get slice form recv_buffer
+        let index = unsafe { &mut *self.index };
+        let start = *index;
+        let end = start + length as u64;
+        // limit check
+        if end > self.limit {
+            return Err(io::Error::new(io::ErrorKind::Other, "recv buffer overflow"));
         }
-        let idx = unsafe { &mut *self.index };
-        if *idx + length as u64 > self.limit {
-            panic!("recv buffer overflow");
-        }
-        *idx = *idx + length as u64;
-        data
+        *index = end;
+        let buf = &self.recv_buffer[(start - self.mr.addr) as usize..(end - self.mr.addr) as usize];
+        Ok(buf)
     }
+
+    // todo: release the buf
+    pub fn release_buf(&self, _buf: &[u8]) {}
 
     pub fn rx(&self) -> &mut Receiver<u32> {
         unsafe { &mut *(self.rx) }
     }
 
-    pub async fn recv(&self) -> Vec<u8> {
+    pub async fn recv(&self) -> io::Result<&[u8]> {
         let length = self.rx().recv().await.unwrap();
         self.read(length)
     }

@@ -2,12 +2,11 @@
 
 use std::sync::Arc;
 
-use ibv::connection::client::Client;
+use ibv::connection::conn::connect;
 
 #[tokio::main]
 async fn main() {
-    let cli = Client::new();
-    let conn = Arc::new(cli.connect("127.0.0.1:7777").await.unwrap());
+    let conn = Arc::new(connect("127.0.0.1:7777").await.unwrap());
 
     println!("client ready to use");
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -16,11 +15,15 @@ async fn main() {
     let conn1 = conn.clone();
     tokio::spawn(async move {
         let mut count = 0;
+        println!("start recving");
         loop {
-            let msg = conn1.recv_msg().await;
+            let msg = match conn1.recv_msg().await {
+                Ok(msg) => msg,
+                Err(_) => break,
+            };
             count += 1;
             println!("count: {}, msg: {:?}", count, msg);
-            if count == 1000 {
+            if count == 3 {
                 println!("recv response done");
                 tx.send(()).unwrap();
                 break;
@@ -31,11 +34,15 @@ async fn main() {
     println!("start sending");
     // time elapsed
     let start = std::time::Instant::now();
-    for i in 0..1000 as u32 {
+    for i in 0..3 as u32 {
         let conn1 = conn.clone();
         handles.push(tokio::spawn(async move {
             let data = i.to_be_bytes();
-            conn1.send_msg(&data).await;
+            let data = &[std::io::IoSlice::new(&data)];
+            match conn1.send_msg(data).await {
+                Ok(_) => (),
+                Err(err) => println!("err: {}", err),
+            }
         }));
     }
 

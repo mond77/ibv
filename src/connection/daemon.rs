@@ -26,7 +26,10 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<u32>) {
             match wc.opcode() {
                 WriteWithImm => {
                     let length = wc.byte_len();
-                    tx.send(length).await.unwrap();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        tx.send(length).await.unwrap();
+                    });
                     // todo: add RQE in task
                     // qp.post_null_recv(1);
                 }
@@ -40,7 +43,7 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<u32>) {
         }
         if wcs.len() == 0 {
             // sleep for 10ms
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
     }
 }
