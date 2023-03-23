@@ -1,3 +1,4 @@
+use rdma_sys::ibv_qp_state::{IBV_QPS_ERR, IBV_QPS_INIT, IBV_QPS_RTR, IBV_QPS_RTS};
 use std::mem::ManuallyDrop;
 use std::{
     fmt::{self, Debug, Formatter},
@@ -65,6 +66,17 @@ impl QP {
 
     pub fn qpn(&self) -> u32 {
         unsafe { self.inner.as_ref().qp_num }
+    }
+
+    pub fn status(&self) -> Status {
+        let status = unsafe { self.inner.as_ref().state };
+        match status {
+            IBV_QPS_INIT => Status::INIT,
+            IBV_QPS_RTR => Status::RTR,
+            IBV_QPS_RTS => Status::RTS,
+            IBV_QPS_ERR => Status::ERROR,
+            _ => Status::Unknown,
+        }
     }
 
     pub fn endpoint(&self) -> EndPoint {
@@ -176,11 +188,8 @@ impl QP {
     }
 
     pub async fn exchange_recv_buf(&mut self) -> (RecvBuffer, RemoteMR) {
-        let recv_buffer = ManuallyDrop::new([0u8; DEFAULT_BUFFER_SIZE]);
-        let mr = Arc::new(MR::new(
-            &self.pd,
-            &mut ManuallyDrop::into_inner(recv_buffer),
-        ));
+        let mut recv_buffer = ManuallyDrop::new(vec![0u8; DEFAULT_BUFFER_SIZE]);
+        let mr = Arc::new(MR::new(&self.pd, &mut recv_buffer));
         let recv_buffer = RecvBuffer::new(mr.clone(), recv_buffer);
         // send local_buf to remote
         let send_mr = RemoteMR::from_mr(mr);
@@ -393,5 +402,26 @@ impl EndPoint {
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
         bincode::deserialize(bytes).unwrap()
+    }
+}
+
+#[derive(Debug)]
+pub enum Status {
+    INIT,
+    RTR,
+    RTS,
+    ERROR,
+    Unknown,
+}
+
+impl From<u32> for Status {
+    fn from(status: u32) -> Self {
+        match status {
+            IBV_QPS_INIT => Status::INIT,
+            IBV_QPS_RTR => Status::RTR,
+            IBV_QPS_RTS => Status::RTS,
+            IBV_QPS_ERR => Status::ERROR,
+            _ => Status::Unknown,
+        }
     }
 }

@@ -24,6 +24,6 @@
  4. sendbuf,recvbuf (done)
     future todo: use wr_list to improve the performace
 22th to ~, Mar 
- 1. change to async code, slove the thread communication blocking.
- 2. Two-way communication between client and server. 
- 3. completion event channel to notify event.
+ 1. change to async code, slove the thread communication blocking. （done）
+ 2. Two-way communication between client and server. (done)
+ 3. completion event channel to notify event. 

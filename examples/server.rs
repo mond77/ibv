@@ -12,7 +12,7 @@ async fn main() {
     println!("server ready to use");
 
     println!("start recving");
-    if let Err(e) = conn.polling.join() {
+    if let Err(e) = conn.daemon.join() {
         println!("recving error: {:?}", e);
     }
 

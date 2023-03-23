@@ -6,7 +6,7 @@ use std::{
 };
 
 use clippy_utilities::Cast;
-use rdma_sys::{ibv_access_flags, ibv_mr, ibv_reg_mr, ibv_sge};
+use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
 
 use crate::connection::DEFAULT_BUFFER_SIZE;
@@ -54,14 +54,6 @@ impl MR {
             addr: self.addr,
             length: self.length,
             lkey: self.lkey,
-        }
-    }
-}
-
-impl Drop for MR {
-    fn drop(&mut self) {
-        unsafe {
-            rdma_sys::ibv_dereg_mr(self.inner());
         }
     }
 }
@@ -163,8 +155,8 @@ impl RemoteBufManager {
 
 // use BufPoll instead
 pub struct SendBuffer {
-    _mr: Arc<MR>,
-    send_buf: ManuallyDrop<[u8; DEFAULT_BUFFER_SIZE]>,
+    mr: Arc<MR>,
+    send_buf: ManuallyDrop<Vec<u8>>,
     lock: Mutex<u64>,
     limit: u64,
     local_buf: LocalBuf,
@@ -172,14 +164,14 @@ pub struct SendBuffer {
 
 impl SendBuffer {
     pub fn new(pd: &PD) -> Self {
-        let send_buf = ManuallyDrop::new([0u8; DEFAULT_BUFFER_SIZE]);
-        let mr = Arc::new(MR::new(pd, &mut ManuallyDrop::into_inner(send_buf)));
+        let mut send_buf = ManuallyDrop::new(vec![0u8; DEFAULT_BUFFER_SIZE]);
+        let mr = Arc::new(MR::new(pd, &mut send_buf));
         Self {
             lock: Mutex::new(mr.addr),
             send_buf,
             limit: mr.addr + mr.length as u64,
             local_buf: mr.clone().into(),
-            _mr: mr,
+            mr,
         }
     }
 
@@ -199,14 +191,15 @@ impl SendBuffer {
 impl Drop for SendBuffer {
     fn drop(&mut self) {
         unsafe {
+            ibv_dereg_mr(self.mr.inner());
             ManuallyDrop::drop(&mut self.send_buf);
         }
     }
 }
 
 pub struct RecvBuffer {
-    pub _mr: Arc<MR>,
-    recv_buffer: ManuallyDrop<[u8; DEFAULT_BUFFER_SIZE]>,
+    mr: Arc<MR>,
+    recv_buffer: ManuallyDrop<Vec<u8>>,
     index: u64,
     limit: u64,
 }
@@ -215,9 +208,9 @@ unsafe impl Send for RecvBuffer {}
 unsafe impl Sync for RecvBuffer {}
 
 impl RecvBuffer {
-    pub fn new(mr: Arc<MR>, recv_buffer: ManuallyDrop<[u8; DEFAULT_BUFFER_SIZE]>) -> Self {
+    pub fn new(mr: Arc<MR>, recv_buffer: ManuallyDrop<Vec<u8>>) -> Self {
         Self {
-            _mr: mr.clone(),
+            mr: mr.clone(),
             recv_buffer,
             index: mr.addr,
             limit: mr.addr + mr.length as u64,
@@ -240,6 +233,7 @@ impl RecvBuffer {
 impl Drop for RecvBuffer {
     fn drop(&mut self) {
         unsafe {
+            ibv_dereg_mr(self.mr.inner());
             ManuallyDrop::drop(&mut self.recv_buffer);
         }
     }

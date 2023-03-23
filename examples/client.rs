@@ -13,22 +13,23 @@ async fn main() {
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     let mut handles = vec![];
     println!("start sending");
+    // time elapsed
+    let start = std::time::Instant::now();
     for i in 0..1000 as u32 {
-        let conn = conn.clone();
+        let conn1 = conn.clone();
         handles.push(tokio::spawn(async move {
-            // Get the number of i in each quantile
-            let i1 = (i >> 24) as u8;
-            let i2 = (i >> 16) as u8;
-            let i3 = (i >> 8) as u8;
-            let i4 = i as u8;
-            let data = vec![i1, i2, i3, i4];
-            conn.send_msg(&data).await;
+            let data = i.to_be_bytes();
+            conn1.send_msg(&data).await;
         }));
     }
 
     for h in handles {
         h.await.unwrap();
     }
+    let elapsed = start.elapsed();
+    println!("elapsed: {:?}", elapsed);
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
     println!("done");
 }

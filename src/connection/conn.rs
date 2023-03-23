@@ -10,7 +10,7 @@ use crate::types::{
     qp::QP,
 };
 
-use super::daemon::polling;
+use super::daemon::{self, notify, polling};
 
 pub struct Conn {
     qp: Arc<QP>,
@@ -19,7 +19,7 @@ pub struct Conn {
     // recv_buf: RecvBuffer,
     // remote recv_buf
     allocator: RemoteBufManager,
-    pub polling: JoinHandle<()>,
+    pub daemon: JoinHandle<()>,
     lock: Mutex<()>,
 }
 
@@ -33,13 +33,13 @@ impl Conn {
         let qp_c = qp.clone();
         // add sufficient RQE, maybe use SRQ to notify adding RQE
         qp.post_null_recv(1000);
-        let polling = std::thread::spawn(|| polling(qp_c, recv_buf));
+        let daemon = std::thread::spawn(|| notify(qp_c, recv_buf));
         Conn {
             qp,
             allocator,
             lock: Mutex::new(()),
             send_buf,
-            polling: polling,
+            daemon,
         }
     }
 

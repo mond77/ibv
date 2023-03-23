@@ -1,18 +1,22 @@
+use super::device::Device;
+use rdma_sys::*;
+use std::io::{Error, Result};
 use std::{
     fmt::{self, Debug},
     ptr::NonNull,
     sync::Arc,
 };
 
-use rdma_sys::*;
-use std::io::{Error, Result};
-
-use super::device::Device;
+// Define a constant `DEFAULT_CQ_SIZE`
 pub static DEFAULT_CQ_SIZE: i32 = 10000;
 
+// Define a `CQ` struct
 pub struct CQ {
+    // A non-null pointer to an `ibv_cq` struct
     inner: NonNull<ibv_cq>,
+    // An `Arc`-wrapped `Device` struct
     pub device: Arc<Device>,
+    // A pointer to an `ibv_comp_channel` struct wrapped in `Option` type
     channel: Option<NonNull<ibv_comp_channel>>,
 }
 
@@ -21,10 +25,11 @@ unsafe impl Sync for CQ {}
 
 impl CQ {
     pub fn new(device: Arc<Device>) -> Self {
+        let cq = create_cq(&device, DEFAULT_CQ_SIZE, true);
         Self {
-            inner: create_cq(&device, DEFAULT_CQ_SIZE),
+            inner: cq,
             device: device.clone(),
-            channel: None,
+            channel: NonNull::new(unsafe { cq.as_ref().channel }),
         }
     }
 
@@ -36,16 +41,26 @@ impl CQ {
         self.device.inner()
     }
 
+    pub fn channel(&self) -> *mut ibv_comp_channel {
+        self.channel.unwrap().as_ptr()
+    }
+
+    // Define a `poll_wc` method that takes a `u32` as input and returns a `Vec` of `WC`
     pub fn poll_wc(&self, num_entries: u32) -> Result<Vec<WC>> {
+        // If `num_entries` is zero, return an empty `Vec`
         if num_entries == 0 {
             return Ok(Vec::new());
         }
+        // Create a `Vec` with a capacity of `num_entries` and set its length to `num_entries`
         let mut wcs: Vec<WC> = Vec::with_capacity(num_entries as usize);
         unsafe { wcs.set_len(num_entries as usize) };
+        // Poll the completion queue with `ibv_poll_cq` function and store the number of polled work completions in `num_poll`
         let num_poll = unsafe { ibv_poll_cq(self.inner(), num_entries as i32, &mut wcs[0].0) };
+        // If `num_poll` is less than zero, return an `Error` with the last operating system error
         if num_poll < 0 {
             return Err(Error::last_os_error());
         }
+        // Set the length of `wcs` to the number of polled work completions and return `Ok` with `wcs`
         unsafe { wcs.set_len(num_poll as usize) };
         Ok(wcs)
     }
@@ -58,14 +73,14 @@ impl CQ {
         Ok(())
     }
 
-    pub fn wait_for_wc(&mut self) {
+    pub fn get_event(&self) -> i32 {
+        unsafe { ibv_get_cq_event(self.channel(), &mut self.inner(), std::ptr::null_mut()) }
+    }
+
+    pub fn ack_event(&self, nevents: u32) {
         unsafe {
-            ibv_get_cq_event(
-                self.channel.unwrap().as_ptr(),
-                &mut self.inner(),
-                std::ptr::null_mut(),
-            )
-        };
+            ibv_ack_cq_events(self.inner(), nevents);
+        }
     }
 }
 
@@ -77,15 +92,27 @@ impl Drop for CQ {
     }
 }
 
-pub fn create_cq(device: &Device, size: i32) -> NonNull<ibv_cq> {
-    let cq = unsafe {
-        ibv_create_cq(
-            device.inner(),
-            size,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            0,
-        )
+pub fn create_cq(device: &Device, size: i32, with_channel: bool) -> NonNull<ibv_cq> {
+    let cq = if with_channel {
+        unsafe {
+            ibv_create_cq(
+                device.inner(),
+                size,
+                std::ptr::null_mut(),
+                ibv_create_comp_channel(device.inner()),
+                0,
+            )
+        }
+    } else {
+        unsafe {
+            ibv_create_cq(
+                device.inner(),
+                size,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+            )
+        }
     };
     NonNull::new(cq).unwrap()
 }
@@ -100,29 +127,6 @@ impl WC {
     pub fn wr_id(&self) -> u64 {
         self.0.wr_id
     }
-
-    // 0: IBV_WC_SUCCESS - Work Request completed successfully.
-    // 1: IBV_WC_LOC_LEN_ERR - Local length of the scatter/gather list is invalid.
-    // 2: IBV_WC_LOC_QP_OP_ERR - Local QP operation error.
-    // 3: IBV_WC_LOC_EEC_OP_ERR - Local EEC operation error.
-    // 4: IBV_WC_LOC_PROT_ERR - Local protection error.
-    // 5: IBV_WC_WR_FLUSH_ERR - Work Request Flushed Error.
-    // 6: IBV_WC_MW_BIND_ERR - Memory Window Bind Error.
-    // 7: IBV_WC_BAD_RESP_ERR - Bad Response Error.
-    // 8: IBV_WC_LOC_ACCESS_ERR - Local access error.
-    // 9: IBV_WC_REM_INV_REQ_ERR - Remote invalid request error.
-    // 10: IBV_WC_REM_ACCESS_ERR - Remote access error.
-    // 11: IBV_WC_REM_OP_ERR - Remote operation error.
-    // 12: IBV_WC_RETRY_EXC_ERR - Retry counter exceeded.
-    // 13: IBV_WC_RNR_RETRY_EXC_ERR - RNR Retry counter exceeded.
-    // 14: IBV_WC_LOC_RDD_VIOL_ERR - Local RDD Violation Error.
-    // 15: IBV_WC_REM_INV_RD_REQ_ERR - Remote invalid RD Request.
-    // 16: IBV_WC_REM_ABORT_ERR - Remote Abort Error.
-    // 17: IBV_WC_INV_EECN_ERR - Invalid EECN Error.
-    // 18: IBV_WC_INV_EEC_STATE_ERR - Invalid EEC State Error.
-    // 19: IBV_WC_FATAL_ERR - Fatal Error.
-    // 20: IBV_WC_RESP_TIMEOUT_ERR - Response Timeout Error.
-    // 21: IBV_WC_GENERAL_ERR - General Error.
 
     pub fn status(&self) -> WCStatus {
         WCStatus::from(self.0.status)
