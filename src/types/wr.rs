@@ -1,7 +1,6 @@
 //! WR (work request) types.
 
 use super::qp::QP;
-use clippy_utilities::Cast;
 use rdma_sys::{
     ibv_wr_opcode::{IBV_WR_RDMA_READ, IBV_WR_RDMA_WRITE, IBV_WR_RDMA_WRITE_WITH_IMM, IBV_WR_SEND},
     *,

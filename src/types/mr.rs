@@ -8,6 +8,7 @@ use std::{
 use clippy_utilities::Cast;
 use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::Receiver;
 
 use crate::connection::DEFAULT_BUFFER_SIZE;
 
@@ -157,7 +158,7 @@ impl RemoteBufManager {
 pub struct SendBuffer {
     mr: Arc<MR>,
     send_buf: ManuallyDrop<Vec<u8>>,
-    lock: Mutex<u64>,
+    index: Mutex<u64>,
     limit: u64,
     local_buf: LocalBuf,
 }
@@ -167,7 +168,7 @@ impl SendBuffer {
         let mut send_buf = ManuallyDrop::new(vec![0u8; DEFAULT_BUFFER_SIZE]);
         let mr = Arc::new(MR::new(pd, &mut send_buf));
         Self {
-            lock: Mutex::new(mr.addr),
+            index: Mutex::new(mr.addr),
             send_buf,
             limit: mr.addr + mr.length as u64,
             local_buf: mr.clone().into(),
@@ -176,7 +177,7 @@ impl SendBuffer {
     }
 
     pub fn alloc(&self, length: u32) -> Option<LocalBuf> {
-        let mut idx = self.lock.lock().unwrap();
+        let mut idx = self.index.lock().unwrap();
         if *idx + length as u64 > self.limit {
             return None;
         }
@@ -199,8 +200,9 @@ impl Drop for SendBuffer {
 
 pub struct RecvBuffer {
     mr: Arc<MR>,
+    pub rx: *mut Receiver<u32>,
     recv_buffer: ManuallyDrop<Vec<u8>>,
-    index: u64,
+    index: *mut u64,
     limit: u64,
 }
 
@@ -208,25 +210,36 @@ unsafe impl Send for RecvBuffer {}
 unsafe impl Sync for RecvBuffer {}
 
 impl RecvBuffer {
-    pub fn new(mr: Arc<MR>, recv_buffer: ManuallyDrop<Vec<u8>>) -> Self {
+    pub fn new(mr: Arc<MR>, recv_buffer: ManuallyDrop<Vec<u8>>, rx: Receiver<u32>) -> Self {
         Self {
             mr: mr.clone(),
+            rx: Box::into_raw(Box::new(rx)),
             recv_buffer,
-            index: mr.addr,
+            index: Box::into_raw(Box::new(mr.addr)),
             limit: mr.addr + mr.length as u64,
         }
     }
 
-    pub fn read(&mut self, length: u32) -> Vec<u8> {
+    pub fn read(&self, length: u32) -> Vec<u8> {
         let mut data = vec![0u8; length as usize];
         unsafe {
-            std::ptr::copy(self.index as *const u8, data.as_mut_ptr(), length as usize);
+            std::ptr::copy(*self.index as *const u8, data.as_mut_ptr(), length as usize);
         }
-        if self.index + length as u64 > self.limit {
+        let idx = unsafe { &mut *self.index };
+        if *idx + length as u64 > self.limit {
             panic!("recv buffer overflow");
         }
-        self.index = self.index + length as u64;
+        *idx = *idx + length as u64;
         data
+    }
+
+    pub fn rx(&self) -> &mut Receiver<u32> {
+        unsafe { &mut *(self.rx) }
+    }
+
+    pub async fn recv(&self) -> Vec<u8> {
+        let length = self.rx().recv().await.unwrap();
+        self.read(length)
     }
 }
 

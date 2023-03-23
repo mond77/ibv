@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use std::thread::JoinHandle;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use clippy_utilities::Cast;
 
@@ -10,13 +11,12 @@ use crate::types::{
     qp::QP,
 };
 
-use super::daemon::{self, notify, polling};
+use super::daemon::polling;
 
 pub struct Conn {
     qp: Arc<QP>,
     send_buf: SendBuffer,
-    //
-    // recv_buf: RecvBuffer,
+    recv_buf: RecvBuffer,
     // remote recv_buf
     allocator: RemoteBufManager,
     pub daemon: JoinHandle<()>,
@@ -27,19 +27,25 @@ unsafe impl Send for Conn {}
 unsafe impl Sync for Conn {}
 
 impl Conn {
-    pub async fn new(qp: Arc<QP>, recv_buf: RecvBuffer, remote_mr: RemoteMR) -> Self {
+    pub async fn new(
+        qp: Arc<QP>,
+        recv_buf: RecvBuffer,
+        remote_mr: RemoteMR,
+        tx: Sender<u32>,
+    ) -> Self {
         let allocator = RemoteBufManager::new(remote_mr);
         let send_buf = SendBuffer::new(&qp.pd);
         let qp_c = qp.clone();
         // add sufficient RQE, maybe use SRQ to notify adding RQE
         qp.post_null_recv(1000);
-        let daemon = std::thread::spawn(|| notify(qp_c, recv_buf));
+        let daemon = tokio::spawn(polling(qp_c, tx));
         Conn {
             qp,
             allocator,
             lock: Mutex::new(()),
             send_buf,
             daemon,
+            recv_buf,
         }
     }
 
@@ -65,4 +71,14 @@ impl Conn {
         // post a send operation
         self.qp.write_with_imm(local_buf, buf, 32);
     }
+
+    pub async fn recv_msg(&self) -> Vec<u8> {
+        self.recv_buf.recv().await
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnType {
+    Client,
+    Server,
 }

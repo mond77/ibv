@@ -27,8 +27,8 @@ impl Client {
         qp.handshake().await;
         println!("handshake done");
         // exchange recv_buf with client
-        let (recv_buf, remote_mr) = qp.exchange_recv_buf().await;
-        let conn = Conn::new(Arc::new(qp), recv_buf, remote_mr).await;
+        let (recv_buf, remote_mr, rx) = qp.exchange_recv_buf().await;
+        let conn = Conn::new(Arc::new(qp), recv_buf, remote_mr, rx).await;
 
         Ok(conn)
     }

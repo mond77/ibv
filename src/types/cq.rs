@@ -24,12 +24,25 @@ unsafe impl Send for CQ {}
 unsafe impl Sync for CQ {}
 
 impl CQ {
-    pub fn new(device: Arc<Device>) -> Self {
-        let cq = create_cq(&device, DEFAULT_CQ_SIZE, true);
+    pub fn new(device: Arc<Device>, with_channel: bool) -> Self {
+        let mut channel: *mut ibv_comp_channel = std::ptr::null_mut();
+        if with_channel {
+            channel = unsafe { ibv_create_comp_channel(device.inner()) };
+        }
+        let cq = NonNull::new(unsafe {
+            ibv_create_cq(
+                device.inner(),
+                DEFAULT_CQ_SIZE,
+                std::ptr::null_mut(),
+                channel,
+                0,
+            )
+        })
+        .unwrap();
         Self {
             inner: cq,
             device: device.clone(),
-            channel: NonNull::new(unsafe { cq.as_ref().channel }),
+            channel: NonNull::new(channel),
         }
     }
 

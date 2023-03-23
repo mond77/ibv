@@ -11,6 +11,22 @@ async fn main() {
 
     println!("client ready to use");
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    // tokio oneshot
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let conn1 = conn.clone();
+    tokio::spawn(async move {
+        let mut count = 0;
+        loop {
+            let msg = conn1.recv_msg().await;
+            count += 1;
+            println!("count: {}, msg: {:?}", count, msg);
+            if count == 1000 {
+                println!("recv response done");
+                tx.send(()).unwrap();
+                break;
+            }
+        }
+    });
     let mut handles = vec![];
     println!("start sending");
     // time elapsed
@@ -23,9 +39,7 @@ async fn main() {
         }));
     }
 
-    for h in handles {
-        h.await.unwrap();
-    }
+    rx.await.unwrap();
     let elapsed = start.elapsed();
     println!("elapsed: {:?}", elapsed);
 
