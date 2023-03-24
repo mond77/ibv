@@ -25,13 +25,13 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<u32>) {
             // match opcode
             match wc.opcode() {
                 WriteWithImm => {
+                    // post recv request immediately to avoid RQE shortage
+                    qp.post_null_recv();
                     let length = wc.byte_len();
                     let tx = tx.clone();
-                    tokio::spawn(async move {
-                        tx.send(length).await.unwrap();
-                    });
-                    // todo: add RQE in task
-                    // qp.post_null_recv(1);
+                    // there is no need to spawn a task. 
+                    tx.send(length).await.unwrap();
+                    
                 }
                 Write => {
                     // send data
@@ -42,12 +42,16 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<u32>) {
             }
         }
         if wcs.len() == 0 {
-            // sleep for 10ms
-            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            // the interval of polling mattes a little with the throughput. 
+            // too long interval will affect latency.
+            // too short interval will cause high cpu usage and other tasks can't be executed.
+            // influence the situation of instantaneous mass requests that may cause RQE shortage.
+            tokio::time::sleep(std::time::Duration::from_micros(2000)).await;
         }
     }
 }
 
+// cann't work
 pub fn notify(qp: Arc<QP>, recv_buf: RecvBuffer) {
     loop {
         println!("req_notify");

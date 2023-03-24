@@ -1,3 +1,4 @@
+use super::default::DEFAULT_CQ_SIZE;
 use super::device::Device;
 use rdma_sys::*;
 use std::io::{Error, Result};
@@ -6,9 +7,6 @@ use std::{
     ptr::NonNull,
     sync::Arc,
 };
-
-// Define a constant `DEFAULT_CQ_SIZE`
-pub static DEFAULT_CQ_SIZE: i32 = 10000;
 
 // Define a `CQ` struct
 pub struct CQ {

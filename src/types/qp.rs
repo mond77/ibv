@@ -19,9 +19,7 @@ use serde::{Deserialize, Serialize};
 use clippy_utilities::Cast;
 use rdma_sys::*;
 
-use crate::connection::DEFAULT_BUFFER_SIZE;
-
-use super::cq::DEFAULT_CQ_SIZE;
+use super::default::{DEFAULT_BUFFER_SIZE, DEFAULT_CQ_SIZE, DEFAULT_RQE_COUNT};
 use super::{
     cq::CQ,
     default::DEFAULT_GID_INDEX,
@@ -41,7 +39,7 @@ pub struct QP {
 impl QP {
     pub fn new(device: Arc<Device>, qp_cap: QPCap) -> Self {
         let pd = Arc::new(PD::new(device.clone()));
-        let cq = Arc::new(CQ::new(device.clone(), true));
+        let cq = Arc::new(CQ::new(device.clone(), false));
         Self {
             inner: create_qp(&pd, &cq, qp_cap),
             pd,
@@ -111,7 +109,7 @@ impl QP {
     pub async fn handshake(&mut self) {
         // Exchange QP information withw the remote side (e.g. using sockets)
         let enp = self.endpoint();
-        println!("server enp: {:?}", enp);
+        // println!("server enp: {:?}", enp);
         let bytes = enp.to_bytes();
         if let Err(_) = self.stream.as_mut().unwrap().write_all(&bytes).await {
             println!("write stream error");
@@ -192,7 +190,7 @@ impl QP {
     pub async fn exchange_recv_buf(&mut self) -> (RecvBuffer, RemoteMR, Sender<u32>) {
         let mut recv_buffer = ManuallyDrop::new(vec![0u8; DEFAULT_BUFFER_SIZE]);
         let mr = Arc::new(MR::new(&self.pd, &mut recv_buffer));
-        let (tx, rx) = mpsc::channel(DEFAULT_CQ_SIZE as usize);
+        let (tx, rx) = mpsc::channel(DEFAULT_RQE_COUNT as usize);
         let recv_buffer = RecvBuffer::new(mr.clone(), recv_buffer, rx);
         // send local_buf to remote
         let send_mr = RemoteMR::from_mr(mr);
@@ -244,13 +242,9 @@ impl QP {
         }
     }
 
-    pub fn post_null_recv(&self, count: usize) {
-        for _ in 0..count {
-            let mut wr_recv = WR::new(0, WRType::RECV, vec![], None);
-            if let Err(e) = wr_recv.post_to_qp(self) {
-                println!("post recv error: {:?}", e);
-            }
-        }
+    pub fn post_null_recv(&self) {
+        let mut wr_recv = WR::new(0, WRType::RECV, vec![], None);
+        wr_recv.post_to_qp(self).unwrap();
     }
 }
 

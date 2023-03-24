@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Receiver;
 use tokio::{io, sync::Mutex};
 
-use crate::connection::DEFAULT_BUFFER_SIZE;
+use super::default::DEFAULT_BUFFER_SIZE;
 
 use super::pd::PD;
 

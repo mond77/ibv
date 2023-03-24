@@ -22,10 +22,14 @@
  2. abstract poll CQ with size. (done)
  3. implement the write_with_imm operation. (done)
  4. sendbuf,recvbuf (done)
-    future todo: use wr_list to improve the performace
+ future todo:
+    1. use wr_list to improve the performace
 22th to 24th, Mar 
  1. change to async code, slove the thread communication blocking. （done）
  2. Two-way communication between client and server. (done)
  3. completion event channel to notify event. (cann't work, to debug)
 27th to ~, Mar
- 1. refactor connection mod to fit usage.
+ 1. refactor connection mod to fit usage. (done)
+ 2. instant mass request but insufficient REQ. (Reduced polling interval, limit sending at time, done)
+ future todo: 
+    1. improve polling daemon.

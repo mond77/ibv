@@ -3,7 +3,7 @@
 
 use std::{io::IoSlice, sync::Arc};
 
-use ibv::connection::server::Server;
+use ibv::connection::{conn::Conn, server::Server};
 extern crate tokio;
 
 #[tokio::main]
@@ -14,9 +14,16 @@ async fn main() {
     println!("server ready to use");
 
     println!("start recving");
+    handle(conn).await;
+
+    println!("done");
+}
+
+// parse recv_msg and response
+pub async fn handle(conn: Arc<Conn>) {
     let mut count: u32 = 0;
     loop {
-        let msg = match conn.recv_msg().await {
+        let _msg = match conn.recv_msg().await {
             Ok(msg) => msg,
             Err(_) => break,
         };
@@ -27,14 +34,10 @@ async fn main() {
             let response = count.to_be_bytes();
             let response = &[IoSlice::new(&response)];
             match conn.send_msg(response).await {
-                Ok(_) => {
-                    println!("response sent");
-                }
+                Ok(_) => (),
                 Err(err) => println!("err: {}", err),
             }
         });
-        println!("count: {}, msg: {:?}", count, msg);
+        // println!("count: {}, msg: {:?}", count, _msg);
     }
-
-    println!("done");
 }

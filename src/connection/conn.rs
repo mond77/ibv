@@ -4,11 +4,15 @@
 //!     2.recv_msg() -> Result<&[u8]>
 
 use crate::types::{
+    default::DEFAULT_RQE_COUNT,
     device::{default_device, Device},
     qp::QPCap,
 };
-use std::io::Result;
 use std::{io::IoSlice, sync::Arc};
+use std::{
+    io::Result,
+    sync::atomic::{AtomicI32, Ordering},
+};
 use tokio::net::{TcpListener, TcpStream};
 
 use tokio::sync::Mutex;
@@ -22,14 +26,21 @@ use crate::types::{
 
 use super::daemon::polling;
 
+// RQE of the remote side might be shortage, so we need to limit the number of sending
+// test shows that the max sending is 1023 in RoCE that equal to the max RQE of the remote side
+pub static MAX_SENDING: i32 = DEFAULT_RQE_COUNT as i32;
+
 pub struct Conn {
     qp: Arc<QP>,
-    send_buf: SendBuffer,
+
     recv_buf: RecvBuffer,
-    // remote recv_buf
-    allocator: RemoteBufManager,
-    pub daemon: JoinHandle<()>,
+    sending: AtomicI32,
+    // protect remote_buf alloc and sending
     lock: Mutex<()>,
+    allocator: RemoteBufManager,
+    send_buf: SendBuffer,
+
+    pub daemon: JoinHandle<()>,
 }
 
 unsafe impl Send for Conn {}
@@ -46,11 +57,14 @@ impl Conn {
         let send_buf = SendBuffer::new(&qp.pd);
         let qp_c = qp.clone();
         // add sufficient RQE, maybe use SRQ to notify adding RQE
-        qp.post_null_recv(1000);
+        for _ in 0..DEFAULT_RQE_COUNT {
+            qp.post_null_recv();
+        }
         let daemon = tokio::spawn(polling(qp_c, tx));
         Conn {
             qp,
             allocator,
+            sending: AtomicI32::new(0),
             lock: Mutex::new(()),
             send_buf,
             daemon,
@@ -83,6 +97,11 @@ impl Conn {
         }
 
         let _lock = self.lock.lock().await;
+        // too much sending will cause device error(memory exhausted or something)
+        while self.sending.load(Ordering::Acquire) >= MAX_SENDING {
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+        }
+        self.sending.fetch_add(1, Ordering::AcqRel);
         // allocate a remote buffer
         let buf = self.allocator.alloc(total_len as u32).unwrap();
         // post a send operation
@@ -91,7 +110,9 @@ impl Conn {
     }
 
     pub async fn recv_msg(&self) -> io::Result<&[u8]> {
-        self.recv_buf.recv().await
+        let result = self.recv_buf.recv().await;
+        self.sending.fetch_add(-1, Ordering::AcqRel);
+        result
     }
 }
 
@@ -114,7 +135,7 @@ pub async fn connect(addr: &str) -> Result<Conn> {
     }
     qp.set_stream(stream);
     qp.handshake().await;
-    println!("handshake done");
+    // println!("handshake done");
     // exchange recv_buf with client
     let (recv_buf, remote_mr, rx) = qp.exchange_recv_buf().await;
     let conn = Conn::new(Arc::new(qp), recv_buf, remote_mr, rx).await;
@@ -137,7 +158,7 @@ pub async fn run(addr: String, sender: Sender<Conn>) {
                 }
                 qp.set_stream(stream);
                 qp.handshake().await;
-                println!("handshake done");
+                // println!("handshake done");
                 // exchange recv_buf with client
                 let (recv_buf, remote_mr, tx) = qp.exchange_recv_buf().await;
                 let conn = Conn::new(Arc::new(qp), recv_buf, remote_mr, tx).await;
