@@ -13,11 +13,17 @@ use std::{
     io::Result,
     sync::atomic::{AtomicI32, Ordering},
 };
-use tokio::net::{TcpListener, TcpStream};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::mpsc::error::TryRecvError,
+};
 
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tokio::{io, sync::mpsc::Sender};
+use tokio::{
+    io,
+    sync::mpsc::{Receiver, Sender},
+};
 
 use crate::types::{
     mr::{RecvBuffer, RemoteBufManager, RemoteMR, SendBuffer},
@@ -32,13 +38,13 @@ pub static MAX_SENDING: i32 = DEFAULT_RQE_COUNT as i32;
 
 pub struct Conn {
     qp: Arc<QP>,
-
     recv_buf: RecvBuffer,
     sending: AtomicI32,
-    // protect remote_buf alloc and sending
+    // protect three below: remote_buf alloc, sending and release.
     lock: Mutex<()>,
     allocator: RemoteBufManager,
     send_buf: SendBuffer,
+    release: (Sender<u32>, MyReceiver<u32>),
 
     pub daemon: JoinHandle<()>,
 }
@@ -51,7 +57,7 @@ impl Conn {
         qp: Arc<QP>,
         recv_buf: RecvBuffer,
         remote_mr: RemoteMR,
-        tx: Sender<u32>,
+        tx: Sender<(u32, u32)>,
     ) -> Self {
         let allocator = RemoteBufManager::new(remote_mr);
         let send_buf = SendBuffer::new(&qp.pd);
@@ -61,6 +67,8 @@ impl Conn {
             qp.post_null_recv();
         }
         let daemon = tokio::spawn(polling(qp_c, tx));
+        let (tx, rx) = tokio::sync::mpsc::channel(DEFAULT_RQE_COUNT as usize);
+        let release = (tx, MyReceiver::new(rx));
         Conn {
             qp,
             allocator,
@@ -68,6 +76,7 @@ impl Conn {
             lock: Mutex::new(()),
             send_buf,
             daemon,
+            release,
             recv_buf,
         }
     }
@@ -102,17 +111,40 @@ impl Conn {
             tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
         }
         self.sending.fetch_add(1, Ordering::AcqRel);
+        let release_length = self.get_release_length();
+
         // allocate a remote buffer
-        let buf = self.allocator.alloc(total_len as u32).unwrap();
+        let buf = self.allocator.alloc(total_len as u32).await;
         // post a send operation
-        self.qp.write_with_imm(local_buf, buf, 32);
+        self.qp.write_with_imm(local_buf, buf, release_length);
         Ok(())
     }
 
+    // after calling recv_msg(), need to call release() before calling recv_msg again
     pub async fn recv_msg(&self) -> io::Result<&[u8]> {
-        let result = self.recv_buf.recv().await;
+        let (length, imm) = self.recv_buf.recv().await;
         self.sending.fetch_add(-1, Ordering::AcqRel);
-        result
+        if imm != 0 {
+            self.allocator.update(imm);
+        }
+        self.recv_buf.read(length)
+    }
+
+    pub async fn release(&self, buf: &[u8]) {
+        let length = buf.len() as u32;
+        if let Some(release_len) = self.recv_buf.notify_release(length) {
+            self.release.0.send(release_len).await.unwrap();
+        }
+    }
+
+    pub fn get_release_length(&self) -> u32 {
+        match self.release.1.try_recv() {
+            Ok(imm) => imm,
+            Err(TryRecvError::Empty) => 0,
+            Err(_) => {
+                panic!("get imm error");
+            }
+        }
     }
 }
 
@@ -173,5 +205,21 @@ pub async fn run(addr: String, sender: Sender<Conn>) {
                 break;
             }
         }
+    }
+}
+
+pub struct MyReceiver<T>(*mut Receiver<T>);
+
+unsafe impl<T> Send for MyReceiver<T> {}
+unsafe impl<T> Sync for MyReceiver<T> {}
+
+impl<T> MyReceiver<T> {
+    pub fn new(rx: Receiver<T>) -> Self {
+        MyReceiver(Box::into_raw(Box::new(rx)))
+    }
+
+    pub fn try_recv(&self) -> core::result::Result<T, TryRecvError> {
+        let rx = unsafe { &mut *self.0 };
+        rx.try_recv()
     }
 }

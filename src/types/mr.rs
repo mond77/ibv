@@ -4,10 +4,11 @@ use std::{mem::ManuallyDrop, ptr::NonNull, sync::Arc};
 use clippy_utilities::Cast;
 use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc::Receiver;
 use tokio::{io, sync::Mutex};
 
-use super::default::DEFAULT_BUFFER_SIZE;
+use super::default::{DEFAULT_SEND_BUFFER_SIZE, MIN_LENGTH_TO_NOTIFY_RELEASE};
 
 use super::pd::PD;
 
@@ -93,6 +94,9 @@ pub struct RemoteBuf {
     pub rkey: u32,
 }
 
+unsafe impl Send for RemoteBuf {}
+unsafe impl Sync for RemoteBuf {}
+
 #[derive(Clone)]
 pub struct LocalBuf {
     pub addr: u64,
@@ -121,32 +125,59 @@ impl From<Arc<MR>> for LocalBuf {
 }
 
 pub struct RemoteBufManager {
-    // do it in conn level
-    index: *mut u64,
-    limit: u64,
+    // update from remote, when done catch up index, it means the space is empty.
+    done: AtomicU64,
+    // index of the available space, index cannot catch up done.
+    index: AtomicU64,
+    left: u64,
+    right: u64,
     mr: RemoteMR,
 }
 
 impl RemoteBufManager {
     pub fn new(mr: RemoteMR) -> Self {
         Self {
-            index: Box::into_raw(Box::new(mr.addr)),
-            limit: mr.addr + mr.length as u64,
+            done: AtomicU64::new(mr.addr),
+            index: AtomicU64::new(mr.addr),
+            left: mr.addr,
+            right: mr.addr + mr.length as u64,
             mr,
         }
     }
 
-    // todo: block it when the space is not enough
-    pub fn alloc(&self, length: u32) -> Option<RemoteBuf> {
-        unsafe {
-            let index = self.index;
-            if *index + length as u64 > self.limit {
-                return None;
+    pub async fn alloc(&self, length: u32) -> RemoteBuf {
+        let rkey = self.mr.rkey;
+        let index = &self.index;
+        let done = &self.done;
+        // notice: index could catch up done, that is a constraint.
+        if index.load(Ordering::Relaxed) + length as u64 > self.right {
+            // wait for remote to release the space, until done > self.left + length as u64 (that means space is enough)
+            while self.left + length as u64 >= done.load(Ordering::Acquire)
+                || done.load(Ordering::Acquire) > index.load(Ordering::Relaxed)
+            {
+                // task sleep for a while
+                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
             }
-            let addr = *index;
-            let rkey = self.mr.rkey;
-            *index = *index + length as u64;
-            Some(RemoteBuf { addr, length, rkey })
+            index.store(self.left, Ordering::Release);
+        } else {
+            // wait for remote to release the space, until done > index + length as u64 (that means space is enough)
+            while index.load(Ordering::Relaxed) + length as u64 >= done.load(Ordering::Acquire)
+                && done.load(Ordering::Acquire) > index.load(Ordering::Relaxed)
+            {
+                // task sleep for a while
+                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+            }
+        }
+        let addr = index.fetch_add(length as u64, Ordering::Relaxed);
+        RemoteBuf { addr, length, rkey }
+    }
+
+    pub fn update(&self, length: u32) {
+        if self.done.load(Ordering::Relaxed) + length as u64 > self.right {
+            self.done
+                .store(self.left + length as u64, Ordering::Release);
+        } else {
+            self.done.fetch_add(length as u64, Ordering::Relaxed);
         }
     }
 }
@@ -162,7 +193,7 @@ pub struct SendBuffer {
 
 impl SendBuffer {
     pub fn new(pd: &PD) -> Self {
-        let mut send_buf = ManuallyDrop::new(vec![0u8; DEFAULT_BUFFER_SIZE]);
+        let mut send_buf = ManuallyDrop::new(vec![0u8; DEFAULT_SEND_BUFFER_SIZE]);
         let mr = Arc::new(MR::new(pd, &mut send_buf));
         Self {
             index: Mutex::new(mr.addr),
@@ -197,23 +228,32 @@ impl Drop for SendBuffer {
 
 pub struct RecvBuffer {
     mr: Arc<MR>,
-    pub rx: *mut Receiver<u32>,
+    // from polling
+    pub rx: *mut Receiver<(u32, u32)>,
     recv_buffer: ManuallyDrop<Vec<u8>>,
+    // it the length of gathered buf to release
+    released: *mut u32,
+    // it the position of the buf have been notify to release
+    done: *mut u64,
     index: *mut u64,
-    limit: u64,
+    left: u64,
+    right: u64,
 }
 
 unsafe impl Send for RecvBuffer {}
 unsafe impl Sync for RecvBuffer {}
 
 impl RecvBuffer {
-    pub fn new(mr: Arc<MR>, recv_buffer: ManuallyDrop<Vec<u8>>, rx: Receiver<u32>) -> Self {
+    pub fn new(mr: Arc<MR>, recv_buffer: ManuallyDrop<Vec<u8>>, rx: Receiver<(u32, u32)>) -> Self {
         Self {
             mr: mr.clone(),
             rx: Box::into_raw(Box::new(rx)),
             recv_buffer,
+            released: Box::into_raw(Box::new(0)),
+            done: Box::into_raw(Box::new(mr.addr)),
             index: Box::into_raw(Box::new(mr.addr)),
-            limit: mr.addr + mr.length as u64,
+            left: mr.addr,
+            right: mr.addr + mr.length as u64,
         }
     }
 
@@ -221,27 +261,45 @@ impl RecvBuffer {
     pub fn read(&self, length: u32) -> io::Result<&[u8]> {
         // get slice form recv_buffer
         let index = unsafe { &mut *self.index };
-        let start = *index;
-        let end = start + length as u64;
-        // limit check
-        if end > self.limit {
-            return Err(io::Error::new(io::ErrorKind::Other, "recv buffer overflow"));
+        let mut start = *index;
+        let mut end = start + length as u64;
+        // right check
+        if end > self.right {
+            start = self.left;
+            end = self.left + length as u64;
         }
         *index = end;
         let buf = &self.recv_buffer[(start - self.mr.addr) as usize..(end - self.mr.addr) as usize];
         Ok(buf)
     }
 
-    // todo: release the buf
-    pub fn release_buf(&self, _buf: &[u8]) {}
-
-    pub fn rx(&self) -> &mut Receiver<u32> {
+    pub fn rx(&self) -> &mut Receiver<(u32, u32)> {
         unsafe { &mut *(self.rx) }
     }
 
-    pub async fn recv(&self) -> io::Result<&[u8]> {
-        let length = self.rx().recv().await.unwrap();
-        self.read(length)
+    pub async fn recv(&self) -> (u32, u32) {
+        self.rx().recv().await.unwrap()
+    }
+
+    pub fn notify_release(&self, length: u32) -> Option<u32> {
+        let released = unsafe { &mut *self.released };
+        let done = unsafe { &mut *self.done };
+        // if over self.right, reset done to self.left.
+        if *done + *released as u64 + length as u64 > self.right {
+            let ret = *released;
+            // length may be over MIN_LENGTH_TO_NOTIFY_RELEASE
+            *released = length;
+            *done = self.left;
+            return Some(ret);
+        } else if *released + length >= MIN_LENGTH_TO_NOTIFY_RELEASE {
+            let ret = *released + length;
+            *done += ret as u64;
+            *released = 0;
+            return Some(ret);
+        } else {
+            *released += length;
+            return None;
+        }
     }
 }
 

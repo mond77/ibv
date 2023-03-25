@@ -8,7 +8,7 @@ use crate::types::{
 use std::sync::Arc;
 
 // if use tokio run a task of polling, the task will be blocked by the tokio runtime. If use tokio(mpsc), the disorder of wc will be a problem.(it doesn't matter)
-pub async fn polling(qp: Arc<QP>, tx: Sender<u32>) {
+pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
     loop {
         let wcs = match qp.cq.poll_wc(10) {
             Ok(wcs) => wcs,
@@ -28,10 +28,9 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<u32>) {
                     // post recv request immediately to avoid RQE shortage
                     qp.post_null_recv();
                     let length = wc.byte_len();
-                    let tx = tx.clone();
-                    // there is no need to spawn a task. 
-                    tx.send(length).await.unwrap();
-                    
+                    let imm = wc.imm_data();
+                    // there is no need to spawn a task.
+                    tx.send((length, imm)).await.unwrap();
                 }
                 Write => {
                     // send data
@@ -42,11 +41,11 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<u32>) {
             }
         }
         if wcs.len() == 0 {
-            // the interval of polling mattes a little with the throughput. 
+            // the interval of polling mattes a little with the throughput.
             // too long interval will affect latency.
             // too short interval will cause high cpu usage and other tasks can't be executed.
             // influence the situation of instantaneous mass requests that may cause RQE shortage.
-            tokio::time::sleep(std::time::Duration::from_micros(2000)).await;
+            tokio::time::sleep(std::time::Duration::from_micros(1000)).await;
         }
     }
 }
@@ -67,7 +66,7 @@ pub fn notify(qp: Arc<QP>, recv_buf: RecvBuffer) {
         let wcs = qp.cq.poll_wc(10).unwrap();
         for wc in wcs.iter() {
             let length = wc.byte_len();
-            let data = recv_buf.read(length);
+            let data = recv_buf.read(length).unwrap();
             // handel data
             println!("recv data: {:?}", data);
         }

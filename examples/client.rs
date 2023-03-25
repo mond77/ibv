@@ -13,17 +13,17 @@ async fn main() {
     // tokio oneshot
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let conn1 = conn.clone();
-    let total = 100000;
+    let total = 200000;
     tokio::spawn(async move {
         let mut count = 0;
         println!("start recving");
         loop {
-            let _msg = match conn1.recv_msg().await {
-                Ok(msg) => msg,
-                Err(_) => break,
-            };
+            let msg = conn1.recv_msg().await.unwrap();
+            // handle data and response
             count += 1;
-            // println!("count: {}, msg: {:?}", count, _msg);
+            let data = msg.to_vec();
+            conn1.release(msg).await;
+            println!("count: {}, msg: {:?}", count, data);
             if count == total {
                 println!("recv response done");
                 tx.send(()).unwrap();

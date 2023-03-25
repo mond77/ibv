@@ -23,12 +23,11 @@ async fn main() {
 pub async fn handle(conn: Arc<Conn>) {
     let mut count: u32 = 0;
     loop {
-        let _msg = match conn.recv_msg().await {
-            Ok(msg) => msg,
-            Err(_) => break,
-        };
+        let msg = conn.recv_msg().await.unwrap();
         // handle data and response
         count += 1;
+        let data = msg.to_vec();
+        conn.release(msg).await;
         let conn = conn.clone();
         tokio::spawn(async move {
             let response = count.to_be_bytes();
@@ -38,6 +37,6 @@ pub async fn handle(conn: Arc<Conn>) {
                 Err(err) => println!("err: {}", err),
             }
         });
-        // println!("count: {}, msg: {:?}", count, _msg);
+        println!("count: {}, msg: {:?}", count, data);
     }
 }

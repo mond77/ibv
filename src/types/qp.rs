@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use clippy_utilities::Cast;
 use rdma_sys::*;
 
-use super::default::{DEFAULT_BUFFER_SIZE, DEFAULT_CQ_SIZE, DEFAULT_RQE_COUNT};
+use super::default::{DEFAULT_RECV_BUFFER_SIZE, DEFAULT_RQE_COUNT};
 use super::{
     cq::CQ,
     default::DEFAULT_GID_INDEX,
@@ -187,8 +187,8 @@ impl QP {
         Ok(())
     }
 
-    pub async fn exchange_recv_buf(&mut self) -> (RecvBuffer, RemoteMR, Sender<u32>) {
-        let mut recv_buffer = ManuallyDrop::new(vec![0u8; DEFAULT_BUFFER_SIZE]);
+    pub async fn exchange_recv_buf(&mut self) -> (RecvBuffer, RemoteMR, Sender<(u32, u32)>) {
+        let mut recv_buffer = ManuallyDrop::new(vec![0u8; DEFAULT_RECV_BUFFER_SIZE]);
         let mr = Arc::new(MR::new(&self.pd, &mut recv_buffer));
         let (tx, rx) = mpsc::channel(DEFAULT_RQE_COUNT as usize);
         let recv_buffer = RecvBuffer::new(mr.clone(), recv_buffer, rx);
