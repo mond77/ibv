@@ -8,8 +8,7 @@ focus on the function at first, considering the safety problem lately.
  2.recv_msg() -> Result<&[u8]>
 
 ## todo
-at ./docs/todo.md
-large todo: error information handle
+todo: error information handle
             switch to async code
 
 ## safety problem

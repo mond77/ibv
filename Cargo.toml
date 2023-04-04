@@ -11,3 +11,4 @@ clippy-utilities = "0.1.0"
 tokio = { versoin = "1.15", features = ["full"]}
 serde = { version = "1", features = ["derive"]}
 bincode = "1.3.3"
+kanal = "0.1.0-pre8"

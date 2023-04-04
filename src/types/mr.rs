@@ -5,12 +5,14 @@ use clippy_utilities::Cast;
 use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::io;
 use tokio::sync::mpsc::Receiver;
-use tokio::{io, sync::Mutex};
 
-use super::default::{DEFAULT_SEND_BUFFER_SIZE, MIN_LENGTH_TO_NOTIFY_RELEASE};
-
+use super::default::{
+    DEFAULT_PER_SIZE_BUFFER_COUNT, DEFAULT_SEND_BUFFER_SIZE, MIN_LENGTH_TO_NOTIFY_RELEASE,
+};
 use super::pd::PD;
+use kanal;
 
 #[derive(Clone)]
 pub struct MR {
@@ -182,38 +184,32 @@ impl RemoteBufManager {
     }
 }
 
-// use BufPoll instead
+// use BufPool instead
 pub struct SendBuffer {
     mr: Arc<MR>,
     send_buf: ManuallyDrop<Vec<u8>>,
-    index: Mutex<u64>,
-    limit: u64,
-    local_buf: LocalBuf,
+    buf_pool: Arc<BufPool>,
 }
 
 impl SendBuffer {
-    pub fn new(pd: &PD) -> Self {
+    pub async fn new(pd: &PD) -> Self {
         let mut send_buf = ManuallyDrop::new(vec![0u8; DEFAULT_SEND_BUFFER_SIZE]);
         let mr = Arc::new(MR::new(pd, &mut send_buf));
+        let local_buf = LocalBuf::from(mr.clone());
+        let buf_pool = Arc::new(BufPool::new(local_buf).await);
         Self {
-            index: Mutex::new(mr.addr),
             send_buf,
-            limit: mr.addr + mr.length as u64,
-            local_buf: mr.clone().into(),
+            buf_pool,
             mr,
         }
     }
 
-    pub async fn alloc(&self, length: u32) -> Option<LocalBuf> {
-        let mut idx = self.index.lock().await;
-        if *idx + length as u64 > self.limit {
-            return None;
-        }
-        let addr = *idx;
-        let lkey = self.local_buf.lkey;
-        *idx = *idx + length as u64;
+    pub async fn alloc(&self, length: u32) -> LocalBuf {
+        self.buf_pool.alloc(length).await
+    }
 
-        Some(LocalBuf { addr, length, lkey })
+    pub async fn release(&self, buf: LocalBuf) {
+        self.buf_pool.release(buf).await;
     }
 }
 
@@ -222,6 +218,128 @@ impl Drop for SendBuffer {
         unsafe {
             ibv_dereg_mr(self.mr.inner());
             ManuallyDrop::drop(&mut self.send_buf);
+        }
+    }
+}
+
+pub struct BufPool {
+    allocated: AtomicU64,
+    local_buf: LocalBuf,
+    // 16 bytes
+    buf_16: (kanal::AsyncSender<LocalBuf>, kanal::AsyncReceiver<LocalBuf>),
+    // 64 bytes
+    buf_64: (kanal::AsyncSender<LocalBuf>, kanal::AsyncReceiver<LocalBuf>),
+    // 256 bytes
+    buf_256: (kanal::AsyncSender<LocalBuf>, kanal::AsyncReceiver<LocalBuf>),
+    // 1024 bytes
+    buf_1024: (kanal::AsyncSender<LocalBuf>, kanal::AsyncReceiver<LocalBuf>),
+    // 4096 bytes
+    buf_4096: (kanal::AsyncSender<LocalBuf>, kanal::AsyncReceiver<LocalBuf>),
+    // 16384 bytes
+    buf_16384: (kanal::AsyncSender<LocalBuf>, kanal::AsyncReceiver<LocalBuf>),
+}
+
+impl BufPool {
+    pub async fn new(local_buf: LocalBuf) -> Self {
+        let allocated = AtomicU64::new(local_buf.addr);
+        let (buf_16_sender, buf_16_receiver) = kanal::unbounded_async();
+        for i in 0..DEFAULT_PER_SIZE_BUFFER_COUNT {
+            let buf = LocalBuf {
+                addr: allocated.fetch_add(i as u64 * 16, Ordering::Relaxed),
+                length: 16,
+                lkey: local_buf.lkey,
+            };
+            buf_16_sender.send(buf).await.unwrap();
+        }
+        let (buf_64_sender, buf_64_receiver) = kanal::unbounded_async();
+        for i in 0..DEFAULT_PER_SIZE_BUFFER_COUNT {
+            let buf = LocalBuf {
+                addr: allocated.fetch_add(i as u64 * 64, Ordering::Relaxed),
+                length: 64,
+                lkey: local_buf.lkey,
+            };
+            buf_64_sender.send(buf).await.unwrap();
+        }
+        let (buf_256_sender, buf_256_receiver) = kanal::unbounded_async();
+        for i in 0..DEFAULT_PER_SIZE_BUFFER_COUNT {
+            let buf = LocalBuf {
+                addr: allocated.fetch_add(i as u64 * 256, Ordering::Relaxed),
+                length: 256,
+                lkey: local_buf.lkey,
+            };
+            buf_256_sender.send(buf).await.unwrap();
+        }
+        let (buf_1024_sender, buf_1024_receiver) = kanal::unbounded_async();
+        for i in 0..DEFAULT_PER_SIZE_BUFFER_COUNT {
+            let buf = LocalBuf {
+                addr: allocated.fetch_add(i as u64 * 1024, Ordering::Relaxed),
+                length: 1024,
+                lkey: local_buf.lkey,
+            };
+            buf_1024_sender.send(buf).await.unwrap();
+        }
+        let (buf_4096_sender, buf_4096_receiver) = kanal::unbounded_async();
+        for i in 0..DEFAULT_PER_SIZE_BUFFER_COUNT {
+            let buf = LocalBuf {
+                addr: allocated.fetch_add(i as u64 * 4096, Ordering::Relaxed),
+                length: 4096,
+                lkey: local_buf.lkey,
+            };
+            buf_4096_sender.send(buf).await.unwrap();
+        }
+        let (buf_16384_sender, buf_16384_receiver) = kanal::unbounded_async();
+        for i in 0..DEFAULT_PER_SIZE_BUFFER_COUNT {
+            let buf = LocalBuf {
+                addr: allocated.fetch_add(i as u64 * 16384, Ordering::Relaxed),
+                length: 16384,
+                lkey: local_buf.lkey,
+            };
+            buf_16384_sender.send(buf).await.unwrap();
+        }
+        Self {
+            local_buf,
+            buf_16: (buf_16_sender, buf_16_receiver),
+            buf_64: (buf_64_sender, buf_64_receiver),
+            buf_256: (buf_256_sender, buf_256_receiver),
+            buf_1024: (buf_1024_sender, buf_1024_receiver),
+            buf_4096: (buf_4096_sender, buf_4096_receiver),
+            buf_16384: (buf_16384_sender, buf_16384_receiver),
+            allocated,
+        }
+    }
+
+    pub async fn alloc(&self, length: u32) -> LocalBuf {
+        // todo: if length > 16384, we will alloc a new buffer
+
+        // alloc a buffer from the pool
+        // length <= 16, alloc from buf_16
+        // length <= 64, alloc from buf_64
+        // length <= 256, alloc from buf_256
+        // length <= 1024, alloc from buf_1024
+        // length <= 4096, alloc from buf_4096
+        // length <= 16384, alloc from buf_16384
+        // if buf of spec length not enough, try to alloc bigger buffer
+        // if all buffer not enough, wait for the channel
+        match length {
+            0..=16 => self.buf_16.1.recv().await.unwrap(),
+            17..=64 => self.buf_64.1.recv().await.unwrap(),
+            65..=256 => self.buf_256.1.recv().await.unwrap(),
+            257..=1024 => self.buf_1024.1.recv().await.unwrap(),
+            1025..=4096 => self.buf_4096.1.recv().await.unwrap(),
+            4097..=16384 => self.buf_16384.1.recv().await.unwrap(),
+            _ => unreachable!(),
+        }
+    }
+
+    pub async fn release(&self, buf: LocalBuf) {
+        match buf.length {
+            0..=16 => self.buf_16.0.send(buf).await.unwrap(),
+            17..=64 => self.buf_64.0.send(buf).await.unwrap(),
+            65..=256 => self.buf_256.0.send(buf).await.unwrap(),
+            257..=1024 => self.buf_1024.0.send(buf).await.unwrap(),
+            1025..=4096 => self.buf_4096.0.send(buf).await.unwrap(),
+            4097..=16384 => self.buf_16384.0.send(buf).await.unwrap(),
+            _ => unreachable!(),
         }
     }
 }

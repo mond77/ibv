@@ -6,6 +6,7 @@
 use crate::types::{
     default::DEFAULT_RQE_COUNT,
     device::{default_device, Device},
+    mr::LocalBuf,
     qp::QPCap,
 };
 use std::{io::IoSlice, sync::Arc};
@@ -60,7 +61,7 @@ impl Conn {
         tx: Sender<(u32, u32)>,
     ) -> Self {
         let allocator = RemoteBufManager::new(remote_mr);
-        let send_buf = SendBuffer::new(&qp.pd);
+        let send_buf = SendBuffer::new(&qp.pd).await;
         let qp_c = qp.clone();
         // add sufficient RQE, maybe use SRQ to notify adding RQE
         for _ in 0..DEFAULT_RQE_COUNT {
@@ -89,34 +90,35 @@ impl Conn {
         // get the total length of the IoSlice of msg
         let total_len = msg.iter().map(|slice| slice.len()).sum::<usize>();
         // allocate the local buffer once.
-        let local_buf = self.send_buf.alloc(total_len as u32).await.unwrap();
+        let local_buf = self.send_buf.alloc(total_len as u32).await;
         // iterate over the slices and copy the data to the local buffer, and send the buffer to the remote
         let mut addr_idx = local_buf.addr;
-        for slice in msg {
+        msg.iter().for_each(|slice| {
             unsafe {
                 std::ptr::copy_nonoverlapping(slice.as_ptr(), addr_idx as *mut _, slice.len())
             };
             addr_idx += slice.len() as u64;
-        }
-        if addr_idx != local_buf.addr + local_buf.length as u64 {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "the length of the IoSlice is not equal to the total length",
-            ));
-        }
+        });
+        let send_data = LocalBuf {
+            addr: local_buf.addr,
+            length: total_len as u32,
+            lkey: local_buf.lkey,
+        };
+        {
+            let _lock = self.lock.lock().await;
+            // too much sending will cause device error(memory exhausted or something)
+            while self.sending.load(Ordering::Acquire) >= MAX_SENDING {
+                tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+            }
+            self.sending.fetch_add(1, Ordering::AcqRel);
+            let release_length = self.get_release_length();
 
-        let _lock = self.lock.lock().await;
-        // too much sending will cause device error(memory exhausted or something)
-        while self.sending.load(Ordering::Acquire) >= MAX_SENDING {
-            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+            // allocate a remote buffer
+            let buf = self.allocator.alloc(total_len as u32).await;
+            // post a send operation
+            self.qp.write_with_imm(send_data, buf, release_length);
         }
-        self.sending.fetch_add(1, Ordering::AcqRel);
-        let release_length = self.get_release_length();
-
-        // allocate a remote buffer
-        let buf = self.allocator.alloc(total_len as u32).await;
-        // post a send operation
-        self.qp.write_with_imm(local_buf, buf, release_length);
+        self.send_buf.release(local_buf).await;
         Ok(())
     }
 
