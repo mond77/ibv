@@ -38,15 +38,14 @@ use super::daemon::polling;
 pub static MAX_SENDING: i32 = DEFAULT_RQE_COUNT as i32;
 
 pub struct Conn {
-    qp: Arc<QP>,
     recv_buf: RecvBuffer,
     sending: AtomicI32,
     // protect three below: remote_buf alloc, sending and release.
     lock: Mutex<()>,
     allocator: RemoteBufManager,
     send_buf: SendBuffer,
+    qp: Arc<QP>,
     release: (Sender<u32>, MyReceiver<u32>),
-
     pub daemon: JoinHandle<()>,
 }
 
@@ -223,5 +222,13 @@ impl<T> MyReceiver<T> {
     pub fn try_recv(&self) -> core::result::Result<T, TryRecvError> {
         let rx = unsafe { &mut *self.0 };
         rx.try_recv()
+    }
+}
+
+impl<T> Drop for MyReceiver<T> {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = Box::from_raw(self.0);
+        }
     }
 }

@@ -37,6 +37,6 @@ pub async fn handle(conn: Arc<Conn>) {
                 Err(err) => println!("err: {}", err),
             }
         });
-        println!("count: {}, msg: {:?}", count, data);
+        // println!("count: {}, msg: {:?}", count, data);
     }
 }

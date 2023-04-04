@@ -8,6 +8,7 @@ focus on the function at first, considering the safety problem lately.
  2.recv_msg() -> Result<&[u8]>
 
 ## todo
+bugs: ibv_dereg_mr cause core dumped
 todo: error information handle
             switch to async code
 

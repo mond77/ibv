@@ -23,7 +23,7 @@ async fn main() {
             count += 1;
             let data = msg.to_vec();
             conn1.release(msg).await;
-            println!("count: {}, msg: {:?}", count, data);
+            // println!("count: {}, msg: {:?}", count, data);
             if count == total {
                 println!("recv response done");
                 tx.send(()).unwrap();

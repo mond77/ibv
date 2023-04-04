@@ -1,3 +1,4 @@
+#![allow(unused)]
 extern crate bincode;
 use std::{mem::ManuallyDrop, ptr::NonNull, sync::Arc};
 
@@ -216,7 +217,9 @@ impl SendBuffer {
 impl Drop for SendBuffer {
     fn drop(&mut self) {
         unsafe {
-            ibv_dereg_mr(self.mr.inner());
+            // Thread 1 "client" received signal SIGBUS, Bus error.
+            // 0x0000000000000051 in ?? ()
+            // ibv_dereg_mr(self.mr.inner());
             ManuallyDrop::drop(&mut self.send_buf);
         }
     }
@@ -424,7 +427,13 @@ impl RecvBuffer {
 impl Drop for RecvBuffer {
     fn drop(&mut self) {
         unsafe {
-            ibv_dereg_mr(self.mr.inner());
+            let _ = Box::from_raw(self.rx);
+            let _ = Box::from_raw(self.released);
+            let _ = Box::from_raw(self.done);
+            let _ = Box::from_raw(self.index);
+            // Thread 1 "client" received signal SIGBUS, Bus error.
+            // 0x0000000000000051 in ?? ()
+            // ibv_dereg_mr(self.mr.inner());
             ManuallyDrop::drop(&mut self.recv_buffer);
         }
     }

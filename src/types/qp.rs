@@ -248,13 +248,13 @@ impl QP {
     }
 }
 
-// impl Drop for QP {
-//     fn drop(&mut self) {
-//         unsafe {
-//             ibv_destroy_qp(self.inner());
-//         }
-//     }
-// }
+impl Drop for QP {
+    fn drop(&mut self) {
+        unsafe {
+            ibv_destroy_qp(self.inner());
+        }
+    }
+}
 
 unsafe impl Send for QP {}
 unsafe impl Sync for QP {}
