@@ -5,7 +5,7 @@ use crate::types::{
     mr::RecvBuffer,
     qp::QP,
 };
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicBool};
 
 // if use tokio run a task of polling, the task will be blocked by the tokio runtime. If use tokio(mpsc), the disorder of wc will be a problem.(it doesn't matter)
 pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
@@ -33,11 +33,10 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
                     tx.send((length, imm)).await.unwrap();
                 }
                 Write => {
-                    let tx_p = wc.wr_id() as *mut tokio::sync::oneshot::Sender<()>;
+                    let using_p = wc.wr_id() as *const AtomicBool;
                     unsafe {
-                        let tx = Box::from_raw(tx_p);
-                        tx.send(()).unwrap();
-
+                        let using = Arc::from_raw(using_p);
+                        using.store(false, std::sync::atomic::Ordering::Relaxed);
                         // println!("send release done")
                     }
                 }

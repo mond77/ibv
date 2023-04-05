@@ -4,9 +4,12 @@ use std::clone;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::{mem::ManuallyDrop, ptr::NonNull, sync::Arc};
+<<<<<<< HEAD
 
 use crate::connection::conn::MAX_SENDING;
 
+=======
+>>>>>>> sendbuf release_task using AtomicBool
 use super::default::{DEFAULT_SEND_BUFFER_SIZE, MIN_LENGTH_TO_NOTIFY_RELEASE};
 use super::pd::PD;
 use clippy_utilities::Cast;
@@ -14,10 +17,17 @@ use kanal;
 use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+<<<<<<< HEAD
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io;
 use tokio::sync::mpsc::{channel, Receiver};
 use tokio::sync::{oneshot, Mutex};
+=======
+use std::sync::atomic::{AtomicU64, Ordering, AtomicBool};
+use tokio::io;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::Mutex;
+>>>>>>> sendbuf release_task using AtomicBool
 use tokio::task::JoinHandle;
 
 #[derive(Clone)]
@@ -199,7 +209,7 @@ pub struct SendBuffer {
     left: u64,
     right: u64,
     to_release: MyDequeue,
-    release_task: JoinHandle<()>,
+    _release_task: JoinHandle<()>,
 }
 
 impl SendBuffer {
@@ -217,12 +227,9 @@ impl SendBuffer {
         let release_task = tokio::spawn(async move {
             loop {
                 // Receive the signal in order, only after the first rx receives the signal, the next one can receive it, and release the done in order
-                while let Some((rx, length)) = to_release_clone.pop_front() {
-                    match rx.await {
-                        Ok(_) => {}
-                        Err(_) => {
-                            // tx is dropped, so it must be released
-                        }
+                while let Some((using, length)) = to_release_clone.pop_front() {
+                    while using.load(Ordering::Relaxed) == true {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                     }
                     // println!("release rx done");
                     if done_clone.load(Ordering::Relaxed) + length as u64 > right {
@@ -242,7 +249,7 @@ impl SendBuffer {
             left,
             right,
             to_release,
-            release_task,
+            _release_task: release_task,
         }
     }
 
@@ -257,7 +264,7 @@ impl SendBuffer {
                 || done.load(Ordering::Acquire) > *index
             {
                 // task sleep for a while
-                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             }
             *index = self.left;
         } else {
@@ -266,26 +273,22 @@ impl SendBuffer {
                 && done.load(Ordering::Acquire) > *index
             {
                 // task sleep for a while
-                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             }
         }
         let addr = *index;
         *index += length as u64;
         (
             LocalBuf { addr, length, lkey },
-            self.add_to_release(addr, length).await,
+            self.add_to_release(length).await,
         )
     }
 
-    pub async fn add_to_release(&self, addr: u64, length: u32) -> u64 {
-        let (tx, rx) = oneshot::channel();
-        self.to_release.push_back(rx, length);
-        // create too many oneshot will cause the program to crash: malloc(): memory corruption
-        while self.to_release.length() as i32 > MAX_SENDING * 10 {
-            // sleep for a while
-            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-        }
-        Box::into_raw(Box::new(tx)) as u64
+    pub async fn add_to_release(&self, length: u32) -> u64 {
+        let using = Arc::new(AtomicBool::new(true));
+        let using_clone = using.clone();
+        self.to_release.push_back(using, length);
+        Arc::into_raw(using_clone) as u64
     }
 }
 
@@ -393,7 +396,7 @@ impl Drop for RecvBuffer {
 }
 
 #[derive(Clone)]
-pub struct MyDequeue(*mut VecDeque<(tokio::sync::oneshot::Receiver<()>, u32)>);
+pub struct MyDequeue(*mut VecDeque<(Arc<AtomicBool>, u32)>);
 
 unsafe impl Send for MyDequeue {}
 unsafe impl Sync for MyDequeue {}
@@ -408,12 +411,12 @@ impl MyDequeue {
         to_release.len()
     }
 
-    pub fn push_back(&self, rx: tokio::sync::oneshot::Receiver<()>, length: u32) {
+    pub fn push_back(&self, flag: Arc<AtomicBool>, length: u32) {
         let mut to_release = unsafe { &mut *self.0 };
-        to_release.push_back((rx, length));
+        to_release.push_back((flag, length));
     }
 
-    pub fn pop_front(&self) -> Option<(tokio::sync::oneshot::Receiver<()>, u32)> {
+    pub fn pop_front(&self) -> Option<(Arc<AtomicBool>, u32)> {
         let mut to_release = unsafe { &mut *self.0 };
         to_release.pop_front()
     }
