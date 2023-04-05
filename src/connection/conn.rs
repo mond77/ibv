@@ -89,7 +89,7 @@ impl Conn {
         // get the total length of the IoSlice of msg
         let total_len = msg.iter().map(|slice| slice.len()).sum::<usize>();
         // allocate the local buffer once.
-        let local_buf = self.send_buf.alloc(total_len as u32).await;
+        let (local_buf, wr_id) = self.send_buf.alloc(total_len as u32).await;
         // iterate over the slices and copy the data to the local buffer, and send the buffer to the remote
         let mut addr_idx = local_buf.addr;
         msg.iter().for_each(|slice| {
@@ -98,11 +98,6 @@ impl Conn {
             };
             addr_idx += slice.len() as u64;
         });
-        let send_data = LocalBuf {
-            addr: local_buf.addr,
-            length: total_len as u32,
-            lkey: local_buf.lkey,
-        };
         {
             let _lock = self.lock.lock().await;
             // too much sending will cause device error(memory exhausted or something)
@@ -115,9 +110,9 @@ impl Conn {
             // allocate a remote buffer
             let buf = self.allocator.alloc(total_len as u32).await;
             // post a send operation
-            self.qp.write_with_imm(send_data, buf, release_length);
+            self.qp
+                .write_with_imm(local_buf, buf, release_length, wr_id);
         }
-        self.send_buf.release(local_buf).await;
         Ok(())
     }
 

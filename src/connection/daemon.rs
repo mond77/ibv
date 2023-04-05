@@ -10,7 +10,7 @@ use std::sync::Arc;
 // if use tokio run a task of polling, the task will be blocked by the tokio runtime. If use tokio(mpsc), the disorder of wc will be a problem.(it doesn't matter)
 pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
     loop {
-        let wcs = match qp.cq.poll_wc(10) {
+        let wcs = match qp.cq.poll_wc(50) {
             Ok(wcs) => wcs,
             Err(_) => {
                 println!("poll wc error");
@@ -33,7 +33,13 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
                     tx.send((length, imm)).await.unwrap();
                 }
                 Write => {
-                    // send data
+                    let tx_p = wc.wr_id() as *mut tokio::sync::oneshot::Sender<()>;
+                    unsafe {
+                        let tx = Box::from_raw(tx_p);
+                        tx.send(()).unwrap();
+
+                        // println!("send release done")
+                    }
                 }
                 _ => {
                     // todo: handle other opcode
@@ -45,7 +51,7 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
             // too long interval will affect latency.
             // too short interval will cause high cpu usage and other tasks can't be executed.
             // influence the situation of instantaneous mass requests that may cause RQE shortage.
-            tokio::time::sleep(std::time::Duration::from_micros(1000)).await;
+            tokio::time::sleep(std::time::Duration::from_micros(5000)).await;
         }
     }
 }

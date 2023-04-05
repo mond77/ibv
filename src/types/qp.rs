@@ -226,9 +226,9 @@ impl QP {
         RemoteMR::deserialize(remote_mr_info)
     }
 
-    pub fn write_with_imm(&self, local_buf: LocalBuf, remote_buf: RemoteBuf, imm: u32) {
+    pub fn write_with_imm(&self, local_buf: LocalBuf, remote_buf: RemoteBuf, imm: u32, wr_id: u64) {
         let mut wr_write = WR::new(
-            1,
+            wr_id,
             WRType::SEND,
             vec![local_buf.into()],
             Some(RDMA::new(
@@ -266,7 +266,7 @@ pub fn create_qp(pd: &PD, cq: &CQ, qp_cap: QPCap) -> NonNull<ibv_qp> {
     qp_init_attr.qp_type = ibv_qp_type::IBV_QPT_RC;
     qp_init_attr.cap = qp_cap.into();
     // while send_flag in WR has IBV_SEND_SIGNALED. with sq_sig_all=0, a Work Completion will be generated when the processing of this WR will be ended.
-    qp_init_attr.sq_sig_all = 0;
+    qp_init_attr.sq_sig_all = 1;
     qp_init_attr.qp_context = ptr::null_mut();
     qp_init_attr.srq = ptr::null_mut();
 
