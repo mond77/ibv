@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rdma-sys = {git = "https://github.com/mond77/rdma-sys.git", branch = "master"}
+rdma-sys = {git = "https://github.com/mond77/rdma-sys.git", branch="ibverbs"}
 clippy-utilities = "0.1.0"
 tokio = { versoin = "1.15", features = ["full"]}
 serde = { version = "1", features = ["derive"]}

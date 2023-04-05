@@ -6,7 +6,6 @@
 use crate::types::{
     default::DEFAULT_RQE_COUNT,
     device::{default_device, Device},
-    mr::LocalBuf,
     qp::QPCap,
 };
 use std::{io::IoSlice, sync::Arc};
@@ -102,7 +101,7 @@ impl Conn {
             let _lock = self.lock.lock().await;
             // too much sending will cause device error(memory exhausted or something)
             while self.sending.load(Ordering::Acquire) >= MAX_SENDING {
-                tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
             }
             self.sending.fetch_add(1, Ordering::AcqRel);
             let release_length = self.get_release_length();
@@ -217,6 +216,16 @@ impl<T> MyReceiver<T> {
     pub fn try_recv(&self) -> core::result::Result<T, TryRecvError> {
         let rx = unsafe { &mut *self.0 };
         rx.try_recv()
+    }
+
+    pub fn get_receiver(&self) -> &mut Receiver<T> {
+        let rx = unsafe { &mut *self.0 };
+        rx
+    }
+
+    pub async fn recv(&self) -> T {
+        let rx = self.get_receiver();
+        rx.recv().await.unwrap()
     }
 }
 

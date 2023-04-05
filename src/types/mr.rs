@@ -1,5 +1,6 @@
 #![allow(unused)]
 extern crate bincode;
+use crate::connection::conn::{MyReceiver, MAX_SENDING};
 use std::clone;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -11,9 +12,9 @@ use kanal;
 use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering, AtomicBool};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::io;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
@@ -195,7 +196,7 @@ pub struct SendBuffer {
     index: Mutex<u64>,
     left: u64,
     right: u64,
-    to_release: MyDequeue,
+    to_release: Arc<MyQueue>,
     _release_task: JoinHandle<()>,
 }
 
@@ -208,24 +209,23 @@ impl SendBuffer {
         let index = Mutex::new(local_buf.addr);
         let left = local_buf.addr;
         let right = local_buf.addr + local_buf.length as u64;
-        let to_release = MyDequeue(Box::into_raw(Box::new(VecDeque::new())));
+        let (tx, rx) = tokio::sync::mpsc::channel((10 * MAX_SENDING) as usize);
+        let to_release = Arc::new(MyQueue::new(tx, rx));
         let done_clone = done.clone();
         let to_release_clone = to_release.clone();
         let release_task = tokio::spawn(async move {
             loop {
                 // Receive the signal in order, only after the first rx receives the signal, the next one can receive it, and release the done in order
-                while let Some((using, length)) = to_release_clone.pop_front() {
-                    while using.load(Ordering::Relaxed) == true {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-                    }
-                    // println!("release rx done");
-                    if done_clone.load(Ordering::Relaxed) + length as u64 > right {
-                        done_clone.store(left + length as u64, Ordering::Release);
-                    } else {
-                        done_clone.fetch_add(length as u64, Ordering::Relaxed);
-                    }
+                let ((using, length)) = to_release_clone.pop().await;
+                while using.load(Ordering::Relaxed) == true {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 }
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                // println!("release rx done");
+                if done_clone.load(Ordering::Relaxed) + length as u64 > right {
+                    done_clone.store(left + length as u64, Ordering::Release);
+                } else {
+                    done_clone.fetch_add(length as u64, Ordering::Relaxed);
+                }
             }
         });
         Self {
@@ -274,7 +274,8 @@ impl SendBuffer {
     pub async fn add_to_release(&self, length: u32) -> u64 {
         let using = Arc::new(AtomicBool::new(true));
         let using_clone = using.clone();
-        self.to_release.push_back(using, length);
+        self.to_release.push(using, length);
+
         Arc::into_raw(using_clone) as u64
     }
 }
@@ -382,29 +383,25 @@ impl Drop for RecvBuffer {
     }
 }
 
-#[derive(Clone)]
-pub struct MyDequeue(*mut VecDeque<(Arc<AtomicBool>, u32)>);
+pub struct MyQueue(
+    Sender<(Arc<AtomicBool>, u32)>,
+    MyReceiver<(Arc<AtomicBool>, u32)>,
+);
 
-unsafe impl Send for MyDequeue {}
-unsafe impl Sync for MyDequeue {}
+unsafe impl Send for MyQueue {}
+unsafe impl Sync for MyQueue {}
 
-impl MyDequeue {
-    pub fn new() -> Self {
-        Self(Box::into_raw(Box::new(VecDeque::new())))
+impl MyQueue {
+    pub fn new(tx: Sender<(Arc<AtomicBool>, u32)>, rx: Receiver<(Arc<AtomicBool>, u32)>) -> Self {
+        let rx = MyReceiver::new(rx);
+        Self(tx, rx)
     }
 
-    pub fn length(&self) -> usize {
-        let to_release = unsafe { &mut *self.0 };
-        to_release.len()
+    pub async fn push(&self, flag: Arc<AtomicBool>, length: u32) {
+        self.0.send((flag, length)).await.unwrap();
     }
 
-    pub fn push_back(&self, flag: Arc<AtomicBool>, length: u32) {
-        let mut to_release = unsafe { &mut *self.0 };
-        to_release.push_back((flag, length));
-    }
-
-    pub fn pop_front(&self) -> Option<(Arc<AtomicBool>, u32)> {
-        let mut to_release = unsafe { &mut *self.0 };
-        to_release.pop_front()
+    pub async fn pop(&self) -> (Arc<AtomicBool>, u32) {
+        self.1.recv().await
     }
 }

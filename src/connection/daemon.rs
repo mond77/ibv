@@ -5,9 +5,9 @@ use crate::types::{
     mr::RecvBuffer,
     qp::QP,
 };
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{atomic::AtomicBool, Arc};
 
-// if use tokio run a task of polling, the task will be blocked by the tokio runtime. If use tokio(mpsc), the disorder of wc will be a problem.(it doesn't matter)
+// if use tokio run a task of polling, the task will be blocked by the tokio runtime.
 pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
     loop {
         let wcs = match qp.cq.poll_wc(50) {
@@ -50,7 +50,7 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
             // too long interval will affect latency.
             // too short interval will cause high cpu usage and other tasks can't be executed.
             // influence the situation of instantaneous mass requests that may cause RQE shortage.
-            tokio::time::sleep(std::time::Duration::from_micros(5000)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
 }
