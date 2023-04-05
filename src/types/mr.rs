@@ -4,12 +4,6 @@ use std::clone;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::{mem::ManuallyDrop, ptr::NonNull, sync::Arc};
-<<<<<<< HEAD
-
-use crate::connection::conn::MAX_SENDING;
-
-=======
->>>>>>> sendbuf release_task using AtomicBool
 use super::default::{DEFAULT_SEND_BUFFER_SIZE, MIN_LENGTH_TO_NOTIFY_RELEASE};
 use super::pd::PD;
 use clippy_utilities::Cast;
@@ -17,17 +11,10 @@ use kanal;
 use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-<<<<<<< HEAD
-use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::io;
-use tokio::sync::mpsc::{channel, Receiver};
-use tokio::sync::{oneshot, Mutex};
-=======
 use std::sync::atomic::{AtomicU64, Ordering, AtomicBool};
 use tokio::io;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::Mutex;
->>>>>>> sendbuf release_task using AtomicBool
 use tokio::task::JoinHandle;
 
 #[derive(Clone)]
