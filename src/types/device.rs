@@ -35,6 +35,14 @@ impl Device {
         }
         unsafe { gid.raw }
     }
+
+    pub fn max_qp_wr(&self) -> i32 {
+        self.device_attr.max_qp_wr
+    }
+
+    pub fn max_mr_size(&self) -> u64 {
+        self.device_attr.max_mr_size
+    }
 }
 
 impl Drop for Device {
@@ -48,7 +56,7 @@ impl Drop for Device {
 unsafe impl Send for Device {}
 unsafe impl Sync for Device {}
 
-pub(crate) fn default_device() -> NonNull<ibv_context> {
+pub fn default_device() -> NonNull<ibv_context> {
     let mut x = 1;
     let context = unsafe { ibv_open_device(*ibv_get_device_list(&mut x)) };
     NonNull::new(context).unwrap()

@@ -3,7 +3,7 @@ use super::default::{DEFAULT_SEND_BUFFER_SIZE, MIN_LENGTH_TO_NOTIFY_RELEASE};
 use super::pd::PD;
 use crate::connection::conn::{MyReceiver, MAX_SENDING};
 use clippy_utilities::Cast;
-use rdma_sys::{ibv_access_flags, ibv_mr, ibv_reg_mr, ibv_sge};
+use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{mem::ManuallyDrop, ptr::NonNull, sync::Arc};
@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 #[derive(Clone)]
 pub struct MR {
     inner: NonNull<ibv_mr>,
+    _pd: Arc<PD>,
     pub addr: u64,
     pub length: u32,
     pub lkey: u32,
@@ -25,7 +26,7 @@ unsafe impl Send for MR {}
 unsafe impl Sync for MR {}
 
 impl MR {
-    pub fn new(pd: &PD, data: &mut [u8]) -> Self {
+    pub fn new(pd: Arc<PD>, data: &mut [u8]) -> Self {
         // todo: access control
         let access = (ibv_access_flags::IBV_ACCESS_LOCAL_WRITE
             | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
@@ -33,10 +34,13 @@ impl MR {
             | ibv_access_flags::IBV_ACCESS_REMOTE_ATOMIC)
             .0
             .cast();
+        // the code below will cause a segfault, because it copy the ibv_mr into a new memory in a temporary variable.
+        // &mut unsafe { *ibv_reg_mr(pd.inner(), data.as_mut_ptr().cast(), data.len(), access) };
         let mr =
-            &mut unsafe { *ibv_reg_mr(pd.inner(), data.as_mut_ptr().cast(), data.len(), access) };
+            unsafe { &mut *ibv_reg_mr(pd.inner(), data.as_mut_ptr().cast(), data.len(), access) };
         Self {
             inner: NonNull::new(mr).unwrap(),
+            _pd: pd,
             addr: mr.addr as u64,
             length: mr.length.cast(),
             lkey: mr.lkey,
@@ -54,6 +58,10 @@ impl MR {
             length: self.length,
             lkey: self.lkey,
         }
+    }
+
+    pub fn dereg(&self) -> i32 {
+        unsafe { ibv_dereg_mr(self.inner()) }
     }
 }
 
@@ -195,7 +203,7 @@ pub struct SendBuffer {
 }
 
 impl SendBuffer {
-    pub async fn new(pd: &PD) -> Self {
+    pub async fn new(pd: Arc<PD>) -> Self {
         let mut send_buf = ManuallyDrop::new(vec![0u8; DEFAULT_SEND_BUFFER_SIZE]);
         let mr = Arc::new(MR::new(pd, &mut send_buf));
         let local_buf = LocalBuf::from(mr.clone());
@@ -213,7 +221,7 @@ impl SendBuffer {
                 let (using, length) = to_release_clone.pop().await;
                 // println!("release rx");
                 while using.load(Ordering::Relaxed) == true {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 }
                 // println!("release rx done");
                 if done_clone.load(Ordering::Relaxed) + length as u64 > right {
@@ -279,8 +287,7 @@ impl Drop for SendBuffer {
     fn drop(&mut self) {
         unsafe {
             // Thread 1 "client" received signal SIGBUS, Bus error.
-            // 0x0000000000000051 in ?? ()
-            // ibv_dereg_mr(self.mr.inner());
+            self.mr.dereg();
             ManuallyDrop::drop(&mut self.send_buf);
         }
     }
@@ -372,7 +379,7 @@ impl Drop for RecvBuffer {
             let _ = Box::from_raw(self.index);
             // Thread 1 "client" received signal SIGBUS, Bus error.
             // 0x0000000000000051 in ?? ()
-            // ibv_dereg_mr(self.mr.inner());
+            self.mr.dereg();
             ManuallyDrop::drop(&mut self.recv_buffer);
         }
     }

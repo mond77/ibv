@@ -189,7 +189,7 @@ impl QP {
 
     pub async fn exchange_recv_buf(&mut self) -> (RecvBuffer, RemoteMR, Sender<(u32, u32)>) {
         let mut recv_buffer = ManuallyDrop::new(vec![0u8; DEFAULT_RECV_BUFFER_SIZE]);
-        let mr = Arc::new(MR::new(&self.pd, &mut recv_buffer));
+        let mr = Arc::new(MR::new(self.pd.clone(), &mut recv_buffer));
         let (tx, rx) = mpsc::channel(DEFAULT_RQE_COUNT as usize);
         let recv_buffer = RecvBuffer::new(mr.clone(), recv_buffer, rx);
         // send local_buf to remote

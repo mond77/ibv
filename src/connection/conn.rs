@@ -59,7 +59,7 @@ impl Conn {
         tx: Sender<(u32, u32)>,
     ) -> Self {
         let allocator = RemoteBufManager::new(remote_mr);
-        let send_buf = SendBuffer::new(&qp.pd).await;
+        let send_buf = SendBuffer::new(qp.pd.clone()).await;
         let qp_c = qp.clone();
         // add sufficient RQE, maybe use SRQ to notify adding RQE
         for _ in 0..DEFAULT_RQE_COUNT {
