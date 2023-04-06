@@ -1,18 +1,12 @@
-#![allow(unused)]
 extern crate bincode;
-use crate::connection::conn::{MyReceiver, MAX_SENDING};
-use std::clone;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-use std::{mem::ManuallyDrop, ptr::NonNull, sync::Arc};
 use super::default::{DEFAULT_SEND_BUFFER_SIZE, MIN_LENGTH_TO_NOTIFY_RELEASE};
 use super::pd::PD;
+use crate::connection::conn::{MyReceiver, MAX_SENDING};
 use clippy_utilities::Cast;
-use kanal;
-use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
+use rdma_sys::{ibv_access_flags, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::{mem::ManuallyDrop, ptr::NonNull, sync::Arc};
 use tokio::io;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
@@ -216,9 +210,10 @@ impl SendBuffer {
         let release_task = tokio::spawn(async move {
             loop {
                 // Receive the signal in order, only after the first rx receives the signal, the next one can receive it, and release the done in order
-                let ((using, length)) = to_release_clone.pop().await;
+                let (using, length) = to_release_clone.pop().await;
+                // println!("release rx");
                 while using.load(Ordering::Relaxed) == true {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
                 }
                 // println!("release rx done");
                 if done_clone.load(Ordering::Relaxed) + length as u64 > right {
@@ -274,7 +269,7 @@ impl SendBuffer {
     pub async fn add_to_release(&self, length: u32) -> u64 {
         let using = Arc::new(AtomicBool::new(true));
         let using_clone = using.clone();
-        self.to_release.push(using, length);
+        self.to_release.push(using, length).await;
 
         Arc::into_raw(using_clone) as u64
     }
