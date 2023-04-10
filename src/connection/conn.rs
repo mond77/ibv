@@ -4,7 +4,7 @@
 //!     2.recv_msg() -> Result<&[u8]>
 
 use crate::types::{
-    default::DEFAULT_RQE_COUNT,
+    default::{DEFAULT_RQE_COUNT, MAX_QP_WR},
     device::{default_device, Device},
     qp::QPCap,
 };
@@ -59,7 +59,7 @@ impl Conn {
         tx: Sender<(u32, u32)>,
     ) -> Self {
         let allocator = RemoteBufManager::new(remote_mr);
-        let send_buf = SendBuffer::new(qp.pd.clone()).await;
+        let send_buf = SendBuffer::new(&qp.pd).await;
         let qp_c = qp.clone();
         // add sufficient RQE, maybe use SRQ to notify adding RQE
         for _ in 0..DEFAULT_RQE_COUNT {
@@ -156,7 +156,7 @@ pub async fn connect(addr: &str) -> Result<Conn> {
 
     let device = Arc::new(Device::new(default_device()));
     // Create a new QP
-    let mut qp = QP::new(device, QPCap::new(1000, 1000, 5, 5));
+    let mut qp = QP::new(device, QPCap::new(MAX_QP_WR, MAX_QP_WR, 5, 5));
     if let Err(err) = qp.init() {
         println!("err: {}", err);
     }
@@ -179,7 +179,7 @@ pub async fn run(addr: String, sender: Sender<Conn>) {
             Ok((stream, addr)) => {
                 println!("New connection: {}", addr);
                 // Create a QP for the new connection
-                let mut qp = QP::new(device.clone(), QPCap::new(1000, 1000, 5, 5));
+                let mut qp = QP::new(device.clone(), QPCap::new(16384, 16384, 5, 5));
                 if let Err(err) = qp.init() {
                     println!("err: {}", err);
                 }

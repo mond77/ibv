@@ -1,4 +1,4 @@
-use super::default::DEFAULT_CQ_SIZE;
+use super::default::MAX_CQE;
 use super::device::Device;
 use rdma_sys::*;
 use std::io::{Error, Result};
@@ -28,13 +28,7 @@ impl CQ {
             channel = unsafe { ibv_create_comp_channel(device.inner()) };
         }
         let cq = NonNull::new(unsafe {
-            ibv_create_cq(
-                device.inner(),
-                DEFAULT_CQ_SIZE,
-                std::ptr::null_mut(),
-                channel,
-                0,
-            )
+            ibv_create_cq(device.inner(), MAX_CQE, std::ptr::null_mut(), channel, 0)
         })
         .unwrap();
         Self {

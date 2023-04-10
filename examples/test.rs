@@ -24,7 +24,7 @@ fn main() {
         assert_eq!(*(ptr as *mut u64), 42);
         &mut *slice_from_raw_parts_mut(ptr, 8)
     };
-    let mr = Arc::new(MR::new(pd, data));
+    let mr = Arc::new(MR::new(&pd, data));
     println!("{}", mr.inner() as u64);
     let errorno = mr.dereg();
     println!("errorno: {}", errorno);

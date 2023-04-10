@@ -6,7 +6,7 @@ use clippy_utilities::Cast;
 use rdma_sys::{ibv_access_flags, ibv_dereg_mr, ibv_mr, ibv_reg_mr, ibv_sge};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::{mem::ManuallyDrop, ptr::NonNull, sync::Arc};
+use std::{ptr::NonNull, sync::Arc};
 use tokio::io;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
@@ -15,7 +15,6 @@ use tokio::task::JoinHandle;
 #[derive(Clone)]
 pub struct MR {
     inner: NonNull<ibv_mr>,
-    _pd: Arc<PD>,
     pub addr: u64,
     pub length: u32,
     pub lkey: u32,
@@ -26,7 +25,7 @@ unsafe impl Send for MR {}
 unsafe impl Sync for MR {}
 
 impl MR {
-    pub fn new(pd: Arc<PD>, data: &mut [u8]) -> Self {
+    pub fn new(pd: &PD, data: &mut [u8]) -> Self {
         // todo: access control
         let access = (ibv_access_flags::IBV_ACCESS_LOCAL_WRITE
             | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
@@ -40,7 +39,6 @@ impl MR {
             unsafe { &mut *ibv_reg_mr(pd.inner(), data.as_mut_ptr().cast(), data.len(), access) };
         Self {
             inner: NonNull::new(mr).unwrap(),
-            _pd: pd,
             addr: mr.addr as u64,
             length: mr.length.cast(),
             lkey: mr.lkey,
@@ -193,7 +191,7 @@ impl RemoteBufManager {
 // use BufPool instead
 pub struct SendBuffer {
     mr: Arc<MR>,
-    send_buf: ManuallyDrop<Vec<u8>>,
+    _send_buf: Vec<u8>,
     done: Arc<AtomicU64>,
     index: Mutex<u64>,
     left: u64,
@@ -203,15 +201,15 @@ pub struct SendBuffer {
 }
 
 impl SendBuffer {
-    pub async fn new(pd: Arc<PD>) -> Self {
-        let mut send_buf = ManuallyDrop::new(vec![0u8; DEFAULT_SEND_BUFFER_SIZE]);
+    pub async fn new(pd: &PD) -> Self {
+        let mut send_buf = vec![0u8; DEFAULT_SEND_BUFFER_SIZE];
         let mr = Arc::new(MR::new(pd, &mut send_buf));
         let local_buf = LocalBuf::from(mr.clone());
         let done = Arc::new(AtomicU64::new(local_buf.addr));
         let index = Mutex::new(local_buf.addr);
         let left = local_buf.addr;
         let right = local_buf.addr + local_buf.length as u64;
-        let (tx, rx) = tokio::sync::mpsc::channel((10 * MAX_SENDING) as usize);
+        let (tx, rx) = tokio::sync::mpsc::channel((2 * MAX_SENDING) as usize);
         let to_release = Arc::new(MyQueue::new(tx, rx));
         let done_clone = done.clone();
         let to_release_clone = to_release.clone();
@@ -232,7 +230,7 @@ impl SendBuffer {
             }
         });
         Self {
-            send_buf,
+            _send_buf: send_buf,
             mr,
             done,
             index,
@@ -285,11 +283,7 @@ impl SendBuffer {
 
 impl Drop for SendBuffer {
     fn drop(&mut self) {
-        unsafe {
-            // Thread 1 "client" received signal SIGBUS, Bus error.
-            self.mr.dereg();
-            ManuallyDrop::drop(&mut self.send_buf);
-        }
+        self.mr.dereg();
     }
 }
 
@@ -297,7 +291,7 @@ pub struct RecvBuffer {
     mr: Arc<MR>,
     // from polling
     pub rx: *mut Receiver<(u32, u32)>,
-    recv_buffer: ManuallyDrop<Vec<u8>>,
+    recv_buffer: Vec<u8>,
     // it the length of gathered buf to release
     released: *mut u32,
     // it the position of the buf have been notify to release
@@ -311,7 +305,7 @@ unsafe impl Send for RecvBuffer {}
 unsafe impl Sync for RecvBuffer {}
 
 impl RecvBuffer {
-    pub fn new(mr: Arc<MR>, recv_buffer: ManuallyDrop<Vec<u8>>, rx: Receiver<(u32, u32)>) -> Self {
+    pub fn new(mr: Arc<MR>, recv_buffer: Vec<u8>, rx: Receiver<(u32, u32)>) -> Self {
         Self {
             mr: mr.clone(),
             rx: Box::into_raw(Box::new(rx)),
@@ -377,10 +371,7 @@ impl Drop for RecvBuffer {
             let _ = Box::from_raw(self.released);
             let _ = Box::from_raw(self.done);
             let _ = Box::from_raw(self.index);
-            // Thread 1 "client" received signal SIGBUS, Bus error.
-            // 0x0000000000000051 in ?? ()
             self.mr.dereg();
-            ManuallyDrop::drop(&mut self.recv_buffer);
         }
     }
 }

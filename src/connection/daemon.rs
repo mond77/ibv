@@ -10,7 +10,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 // if use tokio run a task of polling, the task will be blocked by the tokio runtime.
 pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
     loop {
-        let wcs = match qp.cq.poll_wc(50) {
+        let wcs = match qp.cq.poll_wc(100) {
             Ok(wcs) => wcs,
             Err(_) => {
                 println!("poll wc error");
