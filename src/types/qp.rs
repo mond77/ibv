@@ -6,7 +6,10 @@ use std::{
     ptr::{self, NonNull},
     sync::Arc,
 };
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::{
+    mpsc::{self, Sender},
+    Mutex,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -32,7 +35,7 @@ pub struct QP {
     inner: NonNull<ibv_qp>,
     pub pd: Arc<PD>,
     pub cq: Arc<CQ>,
-    stream: Option<TcpStream>,
+    stream: Option<Mutex<TcpStream>>,
 }
 
 impl QP {
@@ -60,7 +63,29 @@ impl QP {
     }
 
     pub fn set_stream(&mut self, stream: TcpStream) {
-        self.stream = Some(stream);
+        self.stream = Some(Mutex::new(stream));
+    }
+
+    pub async fn tcp_recv(&self, buf: &mut [u8]) -> Result<()> {
+        self.stream
+            .as_ref()
+            .unwrap()
+            .lock()
+            .await
+            .read_exact(buf)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn tcp_send(&self, buf: &[u8]) -> Result<()> {
+        self.stream
+            .as_ref()
+            .unwrap()
+            .lock()
+            .await
+            .write_all(buf)
+            .await?;
+        Ok(())
     }
 
     pub fn qpn(&self) -> u32 {
@@ -110,11 +135,11 @@ impl QP {
         let enp = self.endpoint();
         // println!("server enp: {:?}", enp);
         let bytes = enp.to_bytes();
-        if let Err(_) = self.stream.as_mut().unwrap().write_all(&bytes).await {
+        if let Err(_) = self.tcp_send(bytes.as_slice()).await {
             println!("write stream error");
         }
         let mut buf = vec![0; bytes.len()];
-        if let Err(_) = self.stream.as_mut().unwrap().read_exact(&mut buf).await {
+        if let Err(_) = self.tcp_recv(buf.as_mut_slice()).await {
             println!("read stream error");
         }
         let remote_enp = EndPoint::from_bytes(&buf);
@@ -205,23 +230,13 @@ impl QP {
 
     pub async fn send_mr(&mut self, remote_mr: RemoteMR) {
         let bytes = remote_mr.serialize();
-        self.stream
-            .as_mut()
-            .unwrap()
-            .write_all(&bytes)
-            .await
-            .unwrap();
+        self.tcp_send(bytes.as_slice()).await.unwrap();
     }
 
     // receive RemoteMR from stream
     pub async fn recv_mr(&mut self) -> RemoteMR {
         let mut remote_mr_info = vec![0u8; size_of::<RemoteMR>()];
-        self.stream
-            .as_mut()
-            .unwrap()
-            .read_exact(&mut remote_mr_info)
-            .await
-            .unwrap();
+        self.tcp_recv(remote_mr_info.as_mut_slice()).await.unwrap();
         RemoteMR::deserialize(remote_mr_info)
     }
 
@@ -245,6 +260,10 @@ impl QP {
         let mut wr_recv = WR::new(0, WRType::RECV, vec![], None);
         wr_recv.post_to_qp(self).unwrap();
     }
+
+    // pub fn ask_for_remotemr(&self) -> RemoteMR {
+
+    // }
 }
 
 impl Drop for QP {
