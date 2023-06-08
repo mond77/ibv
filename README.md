@@ -1,5 +1,5 @@
 # ibv
-RDMA practice
+Easy and Efficient Communication on RDMA.
 
 ## interfaec of `Conn`:
  1.send_msg(data: &[IoSlice]) -> Result<()>

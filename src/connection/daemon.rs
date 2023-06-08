@@ -1,3 +1,4 @@
+use log::error;
 use tokio::sync::mpsc::Sender;
 
 use crate::types::{
@@ -13,7 +14,7 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
         let wcs = match qp.cq.poll_wc(100) {
             Ok(wcs) => wcs,
             Err(_) => {
-                println!("poll wc error");
+                error!("poll wc error");
                 break;
             }
         };
@@ -37,7 +38,6 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
                     unsafe {
                         let using = Arc::from_raw(using_p);
                         using.store(false, std::sync::atomic::Ordering::Relaxed);
-                        // println!("send release done")
                     }
                 }
                 _ => {
@@ -55,7 +55,7 @@ pub async fn polling(qp: Arc<QP>, tx: Sender<(u32, u32)>) {
     }
 }
 
-// cann't work
+// cann't work in soft-RoCE
 pub fn notify(qp: Arc<QP>, recv_buf: RecvBuffer) {
     loop {
         println!("req_notify");

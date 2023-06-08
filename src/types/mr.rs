@@ -217,11 +217,9 @@ impl SendBuffer {
             loop {
                 // Receive the signal in order, only after the first rx receives the signal, the next one can receive it, and release the done in order
                 let (using, length) = to_release_clone.pop().await;
-                // println!("release rx");
                 while using.load(Ordering::Relaxed) == true {
                     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 }
-                // println!("release rx done");
                 if done_clone.load(Ordering::Relaxed) + length as u64 > right {
                     done_clone.store(left + length as u64, Ordering::Release);
                 } else {

@@ -13,7 +13,7 @@ async fn main() {
     // tokio oneshot
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let conn1 = conn.clone();
-    let total = 500000;
+    let total = 100000;
     tokio::spawn(async move {
         let mut count = 0;
         println!("start recving");

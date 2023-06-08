@@ -1,3 +1,4 @@
+use log::error;
 use rdma_sys::ibv_qp_state::{IBV_QPS_ERR, IBV_QPS_INIT, IBV_QPS_RTR, IBV_QPS_RTS};
 use std::{
     fmt::{self, Debug, Formatter},
@@ -131,23 +132,22 @@ impl QP {
     }
 
     pub async fn handshake(&mut self) {
-        // Exchange QP information withw the remote side (e.g. using sockets)
+        // Exchange QP information withw the remote side
         let enp = self.endpoint();
-        // println!("server enp: {:?}", enp);
         let bytes = enp.to_bytes();
         if let Err(_) = self.tcp_send(bytes.as_slice()).await {
-            println!("write stream error");
+            error!("send local endpoint error");
         }
         let mut buf = vec![0; bytes.len()];
         if let Err(_) = self.tcp_recv(buf.as_mut_slice()).await {
-            println!("read stream error");
+            error!("recv remote endpoint error");
         }
         let remote_enp = EndPoint::from_bytes(&buf);
         if let Err(err) = self.ready_to_receive(remote_enp) {
-            println!("err: {}", err);
+            error!("handshake RTR err: {}", err);
         }
         if let Err(err) = self.ready_to_send() {
-            println!("server err: {}", err);
+            error!("handshake RTS err: {}", err);
         }
     }
 
@@ -204,7 +204,6 @@ impl QP {
             | ibv_qp_attr_mask::IBV_QP_RNR_RETRY
             | ibv_qp_attr_mask::IBV_QP_SQ_PSN
             | ibv_qp_attr_mask::IBV_QP_MAX_QP_RD_ATOMIC;
-        // SAFETY: ffi, and qp will not modify by other threads
         if unsafe { ibv_modify_qp(self.inner(), &mut attr, attr_mask.0.cast()) } != 0 {
             return Err(Error::last_os_error());
         }
@@ -252,7 +251,7 @@ impl QP {
             )),
         );
         if let Err(e) = wr_write.post_to_qp(self) {
-            println!("post send error: {:?}", e);
+            error!("wr_write_with_imm error: {:?}", e);
         }
     }
 
